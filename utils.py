@@ -244,77 +244,102 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     
     metadata["skills"] = found_skills[:10]  # Limit to 10 skills
     
-    # Extract years of experience from dates
-    # Only look in work experience sections to avoid counting education/project dates
-    from datetime import datetime
-    current_year = datetime.now().year
+    # Extract years of experience from dates (WORK EXPERIENCE ONLY - excludes education)
+    # Look for date patterns like "2015 - 2020", "Jan 2018 - Present", etc.
+    # But only count dates that appear in work experience sections, not education
     
-    # Find work experience section (before education section if present)
-    experience_section = text
-    education_markers = ['EDUCATION', 'ACADEMIC', 'QUALIFICATIONS', 'DEGREE']
-    for marker in education_markers:
-        if marker in text.upper():
-            # Split text at education section
-            parts = re.split(rf'{marker}', text, flags=re.IGNORECASE, maxsplit=1)
-            if len(parts) > 1:
-                experience_section = parts[0]  # Only look before education
-                break
-    
-    # Look for date patterns in experience section only
     date_patterns = [
         r'(\d{4})\s*[-–—]\s*(\d{4}|Present|Current|Now)',
+        r'(\d{1,2}[/-]\d{4})\s*[-–—]\s*(\d{1,2}[/-]\d{4}|Present|Current|Now)',
         r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—]\s*((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|Present|Current|Now)',
     ]
     
-    date_ranges = []
+    # Keywords that indicate EDUCATION sections (exclude these dates)
+    education_keywords = [
+        'education', 'university', 'college', 'school', 'degree', 'bachelor', 'master', 
+        'phd', 'doctorate', 'diploma', 'certificate', 'graduated', 'graduation', 
+        'student', 'studied', 'coursework', 'gpa', 'major', 'minor', 'academic',
+        'bachelor\'s', 'master\'s', 'associate\'s', 'bs ', 'ba ', 'ms ', 'mba',
+        'b.sc', 'm.sc', 'b.eng', 'm.eng', 'undergraduate', 'graduate', 'thesis'
+    ]
+    
+    # Keywords that indicate WORK EXPERIENCE sections (include these dates)
+    work_keywords = [
+        'experience', 'work', 'employment', 'position', 'role', 'job', 'career',
+        'employed', 'worked', 'company', 'employer', 'organization', 'corporation',
+        'engineer', 'developer', 'manager', 'analyst', 'consultant', 'specialist',
+        'director', 'lead', 'senior', 'junior', 'associate', 'intern', 'internship',
+        'responsibilities', 'achievements', 'projects', 'technologies', 'tools'
+    ]
+    
+    years_found = []
+    from datetime import datetime
+    current_year = datetime.now().year
+    
+    # Split text into lines for better context detection
+    lines = text.split('\n')
+    
     for pattern in date_patterns:
-        matches = re.finditer(pattern, experience_section, re.IGNORECASE)
+        matches = re.finditer(pattern, text, re.IGNORECASE)
         for match in matches:
             start_date = match.group(1)
             end_date = match.group(2) if len(match.groups()) > 1 else None
             
-            # Extract year from start date
-            year_match = re.search(r'\d{4}', start_date)
-            if year_match:
-                start_year = int(year_match.group())
-                # Validate year is reasonable (not too old or future)
-                if start_year < 1950 or start_year > current_year:
-                    continue
-                
-                if end_date and end_date.lower() not in ['present', 'current', 'now']:
-                    end_year_match = re.search(r'\d{4}', end_date)
-                    if end_year_match:
-                        end_year = int(end_year_match.group())
-                        if end_year < start_year or end_year > current_year:
-                            continue
-                        duration = end_year - start_year
-                        if 0 < duration <= 50:  # Reasonable duration
-                            date_ranges.append((start_year, end_year))
-                else:
-                    # Current position
-                    duration = current_year - start_year
-                    if 0 < duration <= 50:
-                        date_ranges.append((start_year, current_year))
+            # Get context around the date match (100 characters before and after)
+            match_start = match.start()
+            match_end = match.end()
+            context_start = max(0, match_start - 100)
+            context_end = min(len(text), match_end + 100)
+            context = text[context_start:context_end].lower()
+            
+            # Check if this date is in an education section
+            is_education = any(keyword in context for keyword in education_keywords)
+            
+            # Check if this date is in a work experience section
+            is_work = any(keyword in context for keyword in work_keywords)
+            
+            # Also check the line containing the date
+            line_num = text[:match_start].count('\n')
+            if line_num < len(lines):
+                line_text = lines[line_num].lower()
+                if any(keyword in line_text for keyword in education_keywords):
+                    is_education = True
+                if any(keyword in line_text for keyword in work_keywords):
+                    is_work = True
+            
+            # Only count if it's work experience, not education
+            # Skip if it's clearly education-related
+            if is_education:
+                continue  # Skip education dates
+            
+            # Include if it's clearly work-related OR if it's ambiguous (not clearly education)
+            # This is more lenient - we only exclude dates that are clearly in education sections
+            # This helps catch work experience even if work keywords aren't explicitly found nearby
+            if is_work or not is_education:
+                # Extract year from start date
+                year_match = re.search(r'\d{4}', start_date)
+                if year_match:
+                    start_year = int(year_match.group())
+                    # Additional validation: skip if start year is too old (likely education)
+                    # Most work experience starts after age 18-22, so before 1990 might be education
+                    # But be lenient - only skip if clearly unreasonable (before 1950)
+                    if start_year < 1950:
+                        continue
+                    
+                    if end_date and end_date.lower() not in ['present', 'current', 'now']:
+                        end_year_match = re.search(r'\d{4}', end_date)
+                        if end_year_match:
+                            end_year = int(end_year_match.group())
+                            # Validate: end year should be >= start year
+                            if end_year >= start_year:
+                                years_found.append(end_year - start_year)
+                    else:
+                        # Current position
+                        years_found.append(current_year - start_year)
     
-    # Calculate total experience, handling overlaps
-    if date_ranges:
-        # Sort by start year
-        date_ranges.sort(key=lambda x: x[0])
-        
-        # Merge overlapping ranges
-        merged_ranges = []
-        for start, end in date_ranges:
-            if not merged_ranges:
-                merged_ranges.append((start, end))
-            else:
-                last_start, last_end = merged_ranges[-1]
-                if start <= last_end:  # Overlapping or adjacent
-                    merged_ranges[-1] = (last_start, max(last_end, end))
-                else:
-                    merged_ranges.append((start, end))
-        
-        # Calculate total years from merged ranges
-        total_years = sum(end - start for start, end in merged_ranges)
+    if years_found:
+        # Sum all years (could be multiple positions)
+        total_years = sum(years_found)
         metadata["years_experience"] = min(total_years, 50)  # Cap at 50 years
     
     # Extract education level
@@ -400,84 +425,19 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
             metadata["location"] = match.group(0).strip()
             break
     
-    # Extract certifications - only match actual certification mentions
-    # Look for patterns like "AWS Certified", "Certified in", "Certification", etc.
-    cert_patterns = [
-        # AWS certifications
-        r'AWS\s+(?:Certified\s+)?(?:Solutions\s+Architect|Developer|SysOps|DevOps|Cloud\s+Practitioner|Machine\s+Learning|Data\s+Analytics)',
-        r'Amazon\s+Web\s+Services\s+Certified',
-        # Azure certifications
-        r'Azure\s+(?:Certified|Administrator|Developer|Solutions\s+Architect|AI\s+Engineer|Data\s+Scientist)',
-        r'Microsoft\s+Azure\s+Certified',
-        # GCP certifications
-        r'Google\s+Cloud\s+(?:Certified|Professional|Associate)',
-        r'GCP\s+Certified',
-        # PMP and project management
-        r'PMP\s*(?:Certified|Certification)?',
-        r'Project\s+Management\s+Professional',
-        # Security certifications
-        r'CISSP\s*(?:Certified)?',
-        r'Security\+',
-        r'CEH\s*(?:Certified)?',
-        r'CISM\s*(?:Certified)?',
-        # Other professional certifications
-        r'ITIL\s*(?:Certified|Foundation|Expert)?',
-        r'Oracle\s+Certified',
-        r'Microsoft\s+Certified',
-        r'Cisco\s+(?:CCNA|CCNP|CCIE|Certified)',
-        # Cloud/DevOps certifications (only if explicitly mentioned as certification)
-        r'Certified\s+in\s+(?:Kubernetes|Docker|Terraform)',
-        r'(?:Kubernetes|Docker|Terraform)\s+Certified',
+    # Extract certifications
+    cert_keywords = [
+        "AWS Certified", "Azure", "GCP", "Google Cloud",
+        "PMP", "Scrum Master", "Agile", "ITIL",
+        "CISSP", "Security+", "CEH", "CISM",
+        "Oracle Certified", "Microsoft Certified", "Cisco",
+        "Kubernetes", "Docker", "Terraform"
     ]
     
     certs_found = []
-    seen_certs = set()
-    
-    # Look in certifications section if present
-    cert_section = text
-    cert_markers = ['CERTIFICATIONS', 'CERTIFICATES', 'CREDENTIALS', 'LICENSES']
-    for marker in cert_markers:
-        if marker in text.upper():
-            # Extract certifications section
-            parts = re.split(rf'{marker}', text, flags=re.IGNORECASE, maxsplit=1)
-            if len(parts) > 1:
-                cert_section = parts[1]  # Text after certifications header
-                # Limit to next major section (usually 500-1000 chars)
-                next_section = re.search(r'\n\s*(?:EDUCATION|EXPERIENCE|PROJECTS|SKILLS|REFERENCES)', cert_section, re.IGNORECASE)
-                if next_section:
-                    cert_section = cert_section[:next_section.start()]
-                break
-    
-    # Search for certification patterns
-    for pattern in cert_patterns:
-        matches = re.finditer(pattern, cert_section, re.IGNORECASE)
-        for match in matches:
-            cert_text = match.group(0).strip()
-            cert_lower = cert_text.lower()
-            # Avoid duplicates and false positives
-            if cert_lower not in seen_certs and len(cert_text) > 2:
-                # Normalize common variations
-                if 'aws' in cert_lower and 'certified' in cert_lower:
-                    cert_text = 'AWS Certified'
-                elif 'azure' in cert_lower and 'certified' in cert_lower:
-                    cert_text = 'Azure Certified'
-                elif 'google cloud' in cert_lower or 'gcp' in cert_lower:
-                    cert_text = 'Google Cloud Certified'
-                elif 'pmp' in cert_lower:
-                    cert_text = 'PMP'
-                elif 'cissp' in cert_lower:
-                    cert_text = 'CISSP'
-                elif 'security+' in cert_lower:
-                    cert_text = 'Security+'
-                elif 'itil' in cert_lower:
-                    cert_text = 'ITIL'
-                
-                seen_certs.add(cert_lower)
-                certs_found.append(cert_text)
-                if len(certs_found) >= 5:
-                    break
-        if len(certs_found) >= 5:
-            break
+    for cert in cert_keywords:
+        if cert.lower() in text_lower:
+            certs_found.append(cert)
     
     metadata["certifications"] = certs_found[:5]  # Limit to 5
     

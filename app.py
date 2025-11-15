@@ -683,6 +683,14 @@ def show_analytics():
             avg_exp = sum(experience_data) / len(experience_data) if experience_data else 0
             st.metric("Average Experience", f"{avg_exp:.1f} years")
             
+            # Show calculation breakdown
+            with st.expander("🔍 Calculation Details", expanded=False):
+                st.markdown("**Individual Experience Values:**")
+                for i, years in enumerate(experience_data, 1):
+                    st.markdown(f"- Candidate {i}: **{years} years**")
+                st.markdown(f"\n**Calculation:** ({' + '.join(map(str, experience_data))}) ÷ {len(experience_data)} = **{avg_exp:.2f} years**")
+                st.caption(f"Displayed as: {avg_exp:.1f} years (rounded to 1 decimal)")
+            
             # Categorize experience levels
             entry_level = sum(1 for y in experience_data if 0 < y <= 2)
             mid_level = sum(1 for y in experience_data if 2 < y <= 5)
@@ -696,6 +704,48 @@ def show_analytics():
             - 🟠 Senior (6-10 yrs): {senior_level}
             - 🔴 Expert (10+ yrs): {expert_level}
             """)
+            
+            # Explanation of how experience is calculated
+            with st.expander("ℹ️ How Experience Is Calculated", expanded=False):
+                st.markdown("""
+                **Experience Calculation Process:**
+                
+                1. **Date Detection:** System searches for date ranges in resume (e.g., "2015 - 2020", "Jan 2018 - Present")
+                
+                2. **Work Experience Only:** System filters out education dates by checking context:
+                   - ✅ **Includes:** Dates near work keywords (experience, employment, job titles, companies)
+                   - ❌ **Excludes:** Dates near education keywords (university, college, degree, graduation)
+                
+                3. **Years Calculation:** For each work position:
+                   - Past positions: End Year - Start Year
+                   - Current positions: Current Year - Start Year
+                
+                4. **Sum Total:** All years from multiple work positions are summed
+                
+                5. **Categorization:**
+                   - Entry: 0-2 years
+                   - Mid: 3-5 years
+                   - Senior: 6-10 years
+                   - Expert: 10+ years
+                
+                **Example:** Resume with work positions from 2015-2018 (3 yrs) and 2018-2024 (6 yrs) = **9 years total** (Senior level)
+                
+                ⚠️ **Note:** Education/school years are NOT counted as work experience.
+                
+                See `EXPERIENCE_CALCULATION.md` for detailed documentation.
+                """)
+    else:
+        # Show message when no experience data is found
+        st.info("""
+        📋 **No work experience data found**
+        
+        This could happen if:
+        - Resumes don't have work experience dates in standard formats (e.g., "2015 - 2020")
+        - Dates are only in education sections (which are excluded)
+        - Date formats are not recognized (try formats like "Jan 2018 - Present" or "2015-2020")
+        
+        **Tip:** Make sure resumes include work experience sections with date ranges.
+        """)
     
     st.divider()
     
@@ -858,6 +908,24 @@ def show_analytics():
     # Candidate Ranking/Scoring System
     st.markdown("### ⭐ Candidate Ranking & Fit Score")
     st.markdown("**ATS-style scoring based on profile completeness and experience**")
+    
+    # Explanation of scoring system
+    with st.expander("ℹ️ How Fit Scores Are Calculated", expanded=False):
+        st.markdown("""
+        **Fit Score Calculation (0-100 points):**
+        
+        - **Name (10 pts):** Valid name found = 10 points
+        - **Contact Info (20 pts):** Email (10) + Phone (10)
+        - **Skills (20 pts):** 2 points per skill, max 20 (10+ skills)
+        - **Experience (25 pts):** 2.5 points per year, max 25 (10+ years)
+        - **Education (15 pts):** Education level found = 15 points
+        - **Certifications (10 pts):** 2 points per cert, max 10 (5+ certs)
+        
+        **Example:** Candidate with valid name, email, phone, 8 skills, 5 years exp, Bachelor's, 2 certs
+        = 10 + 10 + 10 + 16 + 12.5 + 15 + 4 = **77.5/100**
+        
+        See `SCORING_EXPLANATION.md` for detailed documentation.
+        """)
     
     ranked_candidates = []
     for candidate in st.session_state.metadata_list:
@@ -1150,35 +1218,159 @@ if os.getenv("SHOW_SECURITY_WARNING", "true").lower() == "true":
 # Add custom CSS for mobile responsiveness and better UI styling
 st.markdown("""
 <style>
-    /* Mobile responsiveness */
+    /* Mobile responsiveness - Enhanced */
     @media screen and (max-width: 768px) {
+        /* Main container */
         .main .block-container {
-            padding-left: 1rem;
-            padding-right: 1rem;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+            max-width: 100% !important;
         }
+        
+        /* Sidebar on mobile - override desktop width */
         [data-testid="stSidebar"] {
             min-width: 100% !important;
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+        
+        /* Sidebar content on mobile */
+        [data-testid="stSidebar"] > div:first-child {
+            padding: 0.75rem !important;
+        }
+        
+        /* Headers - smaller on mobile */
+        h1 {
+            font-size: 1.5rem !important;
+        }
+        h2 {
+            font-size: 1.3rem !important;
+        }
+        h3 {
+            font-size: 1.1rem !important;
+        }
+        h4 {
+            font-size: 1rem !important;
         }
         
         /* Chat messages mobile */
         [data-testid="stChatMessage"] {
             padding: 0.5rem !important;
+            font-size: 0.9rem !important;
         }
         
-        /* Analytics charts mobile */
+        /* Analytics charts mobile - full width */
         .js-plotly-plot {
             width: 100% !important;
+            max-width: 100% !important;
             height: auto !important;
+            min-height: 300px !important;
+        }
+        
+        /* Plotly container */
+        .plotly {
+            width: 100% !important;
+            max-width: 100% !important;
         }
         
         /* Tabs mobile */
         [data-baseweb="tab-list"] {
             flex-wrap: wrap;
+            gap: 0.25rem !important;
         }
         
-        /* Metrics mobile */
+        [data-baseweb="tab"] {
+            padding: 0.5rem 0.75rem !important;
+            font-size: 0.85rem !important;
+            min-width: auto !important;
+        }
+        
+        /* Metrics mobile - smaller */
         [data-testid="stMetricValue"] {
-            font-size: 1.5rem !important;
+            font-size: 1.2rem !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            font-size: 0.75rem !important;
+        }
+        
+        /* Columns - stack on mobile */
+        [data-testid="column"] {
+            width: 100% !important;
+            margin-bottom: 1rem !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+        
+        /* Dataframes - scrollable */
+        [data-testid="stDataFrame"] {
+            font-size: 0.75rem !important;
+            overflow-x: auto !important;
+            display: block !important;
+        }
+        
+        /* Tables - horizontal scroll */
+        table {
+            display: block !important;
+            overflow-x: auto !important;
+            white-space: nowrap !important;
+            width: 100% !important;
+            font-size: 0.75rem !important;
+        }
+        
+        /* Buttons - full width on mobile */
+        button {
+            width: 100% !important;
+            margin: 0.25rem 0 !important;
+        }
+        
+        /* Markdown text - smaller */
+        p, li, span {
+            font-size: 0.9rem !important;
+        }
+        
+        /* Expanders - smaller padding */
+        [data-testid="stExpander"] {
+            margin: 0.5rem 0 !important;
+        }
+        
+        [data-testid="stExpander"] summary {
+            font-size: 0.9rem !important;
+            padding: 0.5rem !important;
+        }
+        
+        /* Dividers - thinner */
+        hr {
+            margin: 0.75rem 0 !important;
+        }
+        
+        /* Info boxes - smaller padding */
+        .stAlert, .stInfo, .stSuccess, .stWarning, .stError {
+            padding: 0.75rem !important;
+            font-size: 0.85rem !important;
+        }
+        
+        /* Metrics container */
+        [data-testid="stMetricContainer"] {
+            padding: 0.5rem !important;
+            margin: 0.25rem 0 !important;
+        }
+    }
+    
+    /* Tablet responsiveness */
+    @media screen and (min-width: 769px) and (max-width: 1024px) {
+        .main .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        
+        [data-testid="column"] {
+            padding: 0.5rem !important;
+        }
+        
+        .js-plotly-plot {
+            width: 100% !important;
+            max-width: 100% !important;
         }
     }
     
@@ -1186,11 +1378,54 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background: #262730 !important;
         color: #fafafa !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    /* When sidebar is expanded, ensure full width */
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        min-width: 21rem !important;
+        width: 21rem !important;
+        max-width: 21rem !important;
+    }
+    
+    /* Hide collapsed sidebar completely - cleaner UI */
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        width: 0 !important;
+        min-width: 0 !important;
+        max-width: 0 !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+    }
+    
+    /* Hide sidebar content when collapsed */
+    [data-testid="stSidebar"][aria-expanded="false"] > * {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }
+    
+    /* Ensure sidebar content is properly sized when expanded */
+    [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {
+        width: 100% !important;
+        max-width: 100% !important;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
     }
     
     /* Sidebar content area */
     [data-testid="stSidebar"] > div:first-child {
         background: #262730 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        padding: 1rem !important;
+    }
+    
+    /* Sidebar scrollable content */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        width: 100% !important;
     }
     
     /* Sidebar text visibility - light text on dark background */
@@ -1373,6 +1608,29 @@ st.markdown("""
         color: #fafafa !important;
     }
     
+    /* Sidebar section backgrounds - ensure full width */
+    [data-testid="stSidebar"] .element-container {
+        background: transparent !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow: visible !important;
+    }
+    
+    /* Prevent sidebar content from being cut off */
+    [data-testid="stSidebar"] * {
+        box-sizing: border-box !important;
+    }
+    
+    /* Sidebar file uploader and inputs - ensure full width */
+    [data-testid="stSidebar"] [data-testid="stFileUploader"],
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] textarea,
+    [data-testid="stSidebar"] select,
+    [data-testid="stSidebar"] button {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    
     /* Better spacing for sidebar sections */
     .sidebar-section {
         margin-bottom: 1.5rem;
@@ -1425,24 +1683,6 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     
-    /* Analytics section mobile */
-    @media screen and (max-width: 768px) {
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 0.5rem;
-        }
-        
-        .stTabs [data-baseweb="tab"] {
-            padding: 0.5rem 1rem;
-            font-size: 0.9rem;
-        }
-        
-        /* Stack columns on mobile */
-        [data-testid="column"] {
-            width: 100% !important;
-            margin-bottom: 1rem;
-        }
-    }
-    
     /* Chat message bubbles */
     .stChatMessage {
         animation: fadeIn 0.3s ease-in;
@@ -1473,16 +1713,34 @@ st.markdown("""
         margin: 1.5rem 0;
     }
     
-    /* Responsive tables */
-    @media screen and (max-width: 768px) {
-        [data-testid="stDataFrame"] {
-            font-size: 0.85rem;
+    /* Additional mobile optimizations for extra small screens */
+    @media screen and (max-width: 480px) {
+        /* Extra small screens */
+        h1 {
+            font-size: 1.3rem !important;
+        }
+        h2 {
+            font-size: 1.1rem !important;
+        }
+        h3 {
+            font-size: 1rem !important;
         }
         
-        table {
-            display: block;
-            overflow-x: auto;
-            white-space: nowrap;
+        [data-testid="stMetricValue"] {
+            font-size: 1rem !important;
+        }
+        
+        .js-plotly-plot {
+            min-height: 250px !important;
+        }
+        
+        button {
+            font-size: 0.85rem !important;
+            padding: 0.5rem !important;
+        }
+        
+        [data-testid="stDataFrame"] {
+            font-size: 0.7rem !important;
         }
     }
 </style>
