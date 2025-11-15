@@ -12,10 +12,16 @@ import pytesseract
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 try:
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+    # Try new langchain-huggingface package first
+    from langchain_huggingface import HuggingFaceEmbeddings
     HUGGINGFACE_AVAILABLE = True
 except ImportError:
-    HUGGINGFACE_AVAILABLE = False
+    try:
+        # Fallback to deprecated langchain_community version
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        HUGGINGFACE_AVAILABLE = True
+    except ImportError:
+        HUGGINGFACE_AVAILABLE = False
 try:
     from langchain_openai import AzureChatOpenAI
     AZURE_OPENAI_AVAILABLE = True
@@ -85,7 +91,7 @@ def extract_text_from_pdf(pdf_path: str, use_ocr: bool = False) -> str:
 
 def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     """
-    Extract metadata from resume text: name, email, phone, skills.
+    Extract metadata from resume text: name, email, phone, skills, experience, education, etc.
     
     Args:
         text: Resume text content
@@ -99,7 +105,13 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         "name": "",
         "email": "",
         "phone": "",
-        "skills": []
+        "skills": [],
+        "years_experience": 0,
+        "education_level": "",
+        "job_titles": [],
+        "companies": [],
+        "location": "",
+        "certifications": []
     }
     
     # Extract email
@@ -232,6 +244,243 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     
     metadata["skills"] = found_skills[:10]  # Limit to 10 skills
     
+    # Extract years of experience from dates
+    # Only look in work experience sections to avoid counting education/project dates
+    from datetime import datetime
+    current_year = datetime.now().year
+    
+    # Find work experience section (before education section if present)
+    experience_section = text
+    education_markers = ['EDUCATION', 'ACADEMIC', 'QUALIFICATIONS', 'DEGREE']
+    for marker in education_markers:
+        if marker in text.upper():
+            # Split text at education section
+            parts = re.split(rf'{marker}', text, flags=re.IGNORECASE, maxsplit=1)
+            if len(parts) > 1:
+                experience_section = parts[0]  # Only look before education
+                break
+    
+    # Look for date patterns in experience section only
+    date_patterns = [
+        r'(\d{4})\s*[-–—]\s*(\d{4}|Present|Current|Now)',
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—]\s*((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|Present|Current|Now)',
+    ]
+    
+    date_ranges = []
+    for pattern in date_patterns:
+        matches = re.finditer(pattern, experience_section, re.IGNORECASE)
+        for match in matches:
+            start_date = match.group(1)
+            end_date = match.group(2) if len(match.groups()) > 1 else None
+            
+            # Extract year from start date
+            year_match = re.search(r'\d{4}', start_date)
+            if year_match:
+                start_year = int(year_match.group())
+                # Validate year is reasonable (not too old or future)
+                if start_year < 1950 or start_year > current_year:
+                    continue
+                
+                if end_date and end_date.lower() not in ['present', 'current', 'now']:
+                    end_year_match = re.search(r'\d{4}', end_date)
+                    if end_year_match:
+                        end_year = int(end_year_match.group())
+                        if end_year < start_year or end_year > current_year:
+                            continue
+                        duration = end_year - start_year
+                        if 0 < duration <= 50:  # Reasonable duration
+                            date_ranges.append((start_year, end_year))
+                else:
+                    # Current position
+                    duration = current_year - start_year
+                    if 0 < duration <= 50:
+                        date_ranges.append((start_year, current_year))
+    
+    # Calculate total experience, handling overlaps
+    if date_ranges:
+        # Sort by start year
+        date_ranges.sort(key=lambda x: x[0])
+        
+        # Merge overlapping ranges
+        merged_ranges = []
+        for start, end in date_ranges:
+            if not merged_ranges:
+                merged_ranges.append((start, end))
+            else:
+                last_start, last_end = merged_ranges[-1]
+                if start <= last_end:  # Overlapping or adjacent
+                    merged_ranges[-1] = (last_start, max(last_end, end))
+                else:
+                    merged_ranges.append((start, end))
+        
+        # Calculate total years from merged ranges
+        total_years = sum(end - start for start, end in merged_ranges)
+        metadata["years_experience"] = min(total_years, 50)  # Cap at 50 years
+    
+    # Extract education level
+    education_keywords = {
+        "PhD": ["phd", "ph.d", "doctorate", "doctoral"],
+        "Master's": ["master", "ms ", "m.s", "mba", "m.sc", "meng"],
+        "Bachelor's": ["bachelor", "bs ", "b.s", "ba ", "b.a", "bsc", "b.sc", "beng", "b.eng"],
+        "Associate's": ["associate", "aa ", "a.a", "as ", "a.s"],
+        "Diploma": ["diploma", "certificate"]
+    }
+    
+    text_lower = text.lower()
+    for level, keywords in education_keywords.items():
+        if any(keyword in text_lower for keyword in keywords):
+            metadata["education_level"] = level
+            break
+    
+    # Extract job titles (common patterns)
+    job_title_patterns = [
+        r'(Senior|Junior|Lead|Principal|Staff|Associate)?\s*(Software|Data|ML|AI|DevOps|Cloud|Full.?Stack|Front.?end|Back.?end|Mobile|QA|Test|Security|Network|System|Database|Business|Product|Project|Marketing|Sales|HR|Finance|Operations|Research|Design|UX|UI)\s+(Engineer|Developer|Architect|Analyst|Scientist|Manager|Specialist|Consultant|Designer|Director|Lead|Coordinator|Associate|Executive|Officer|Administrator|Technician)',
+        r'(Software|Data|ML|AI|DevOps|Cloud|Full.?Stack|Front.?end|Back.?end|Mobile|QA|Test|Security|Network|System|Database|Business|Product|Project|Marketing|Sales|HR|Finance|Operations|Research|Design|UX|UI)\s+(Engineer|Developer|Architect|Analyst|Scientist|Manager|Specialist|Consultant|Designer|Director|Lead|Coordinator|Associate|Executive|Officer|Administrator|Technician)',
+        r'(Programmer|Developer|Engineer|Analyst|Manager|Director|Consultant|Specialist|Designer|Architect|Scientist)',
+    ]
+    
+    titles_found = []
+    for pattern in job_title_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            title = match.group(0).strip()
+            if len(title) > 3 and len(title) < 50:  # Reasonable title length
+                titles_found.append(title)
+    
+    # Remove duplicates and limit
+    seen = set()
+    unique_titles = []
+    for title in titles_found:
+        title_lower = title.lower()
+        if title_lower not in seen:
+            seen.add(title_lower)
+            unique_titles.append(title)
+            if len(unique_titles) >= 5:  # Limit to 5 most recent titles
+                break
+    
+    metadata["job_titles"] = unique_titles
+    
+    # Extract company names (look for capitalized words after job titles or in experience section)
+    # This is a simplified extraction - in production, you'd use NER
+    company_patterns = [
+        r'at\s+([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries)?)',
+        r'([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries))',
+    ]
+    
+    companies_found = []
+    for pattern in company_patterns:
+        matches = re.finditer(pattern, text)
+        for match in matches:
+            company = match.group(1).strip() if match.groups() else match.group(0).strip()
+            if len(company) > 2 and len(company) < 50:
+                companies_found.append(company)
+    
+    # Remove duplicates
+    seen = set()
+    unique_companies = []
+    for company in companies_found:
+        company_lower = company.lower()
+        if company_lower not in seen and company_lower not in ['the', 'and', 'at', 'of']:
+            seen.add(company_lower)
+            unique_companies.append(company)
+            if len(unique_companies) >= 5:
+                break
+    
+    metadata["companies"] = unique_companies
+    
+    # Extract location (simplified - looks for city, state patterns)
+    location_patterns = [
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2})',  # City, State
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+)',  # City, State (full name)
+    ]
+    
+    for pattern in location_patterns:
+        match = re.search(pattern, text)
+        if match:
+            metadata["location"] = match.group(0).strip()
+            break
+    
+    # Extract certifications - only match actual certification mentions
+    # Look for patterns like "AWS Certified", "Certified in", "Certification", etc.
+    cert_patterns = [
+        # AWS certifications
+        r'AWS\s+(?:Certified\s+)?(?:Solutions\s+Architect|Developer|SysOps|DevOps|Cloud\s+Practitioner|Machine\s+Learning|Data\s+Analytics)',
+        r'Amazon\s+Web\s+Services\s+Certified',
+        # Azure certifications
+        r'Azure\s+(?:Certified|Administrator|Developer|Solutions\s+Architect|AI\s+Engineer|Data\s+Scientist)',
+        r'Microsoft\s+Azure\s+Certified',
+        # GCP certifications
+        r'Google\s+Cloud\s+(?:Certified|Professional|Associate)',
+        r'GCP\s+Certified',
+        # PMP and project management
+        r'PMP\s*(?:Certified|Certification)?',
+        r'Project\s+Management\s+Professional',
+        # Security certifications
+        r'CISSP\s*(?:Certified)?',
+        r'Security\+',
+        r'CEH\s*(?:Certified)?',
+        r'CISM\s*(?:Certified)?',
+        # Other professional certifications
+        r'ITIL\s*(?:Certified|Foundation|Expert)?',
+        r'Oracle\s+Certified',
+        r'Microsoft\s+Certified',
+        r'Cisco\s+(?:CCNA|CCNP|CCIE|Certified)',
+        # Cloud/DevOps certifications (only if explicitly mentioned as certification)
+        r'Certified\s+in\s+(?:Kubernetes|Docker|Terraform)',
+        r'(?:Kubernetes|Docker|Terraform)\s+Certified',
+    ]
+    
+    certs_found = []
+    seen_certs = set()
+    
+    # Look in certifications section if present
+    cert_section = text
+    cert_markers = ['CERTIFICATIONS', 'CERTIFICATES', 'CREDENTIALS', 'LICENSES']
+    for marker in cert_markers:
+        if marker in text.upper():
+            # Extract certifications section
+            parts = re.split(rf'{marker}', text, flags=re.IGNORECASE, maxsplit=1)
+            if len(parts) > 1:
+                cert_section = parts[1]  # Text after certifications header
+                # Limit to next major section (usually 500-1000 chars)
+                next_section = re.search(r'\n\s*(?:EDUCATION|EXPERIENCE|PROJECTS|SKILLS|REFERENCES)', cert_section, re.IGNORECASE)
+                if next_section:
+                    cert_section = cert_section[:next_section.start()]
+                break
+    
+    # Search for certification patterns
+    for pattern in cert_patterns:
+        matches = re.finditer(pattern, cert_section, re.IGNORECASE)
+        for match in matches:
+            cert_text = match.group(0).strip()
+            cert_lower = cert_text.lower()
+            # Avoid duplicates and false positives
+            if cert_lower not in seen_certs and len(cert_text) > 2:
+                # Normalize common variations
+                if 'aws' in cert_lower and 'certified' in cert_lower:
+                    cert_text = 'AWS Certified'
+                elif 'azure' in cert_lower and 'certified' in cert_lower:
+                    cert_text = 'Azure Certified'
+                elif 'google cloud' in cert_lower or 'gcp' in cert_lower:
+                    cert_text = 'Google Cloud Certified'
+                elif 'pmp' in cert_lower:
+                    cert_text = 'PMP'
+                elif 'cissp' in cert_lower:
+                    cert_text = 'CISSP'
+                elif 'security+' in cert_lower:
+                    cert_text = 'Security+'
+                elif 'itil' in cert_lower:
+                    cert_text = 'ITIL'
+                
+                seen_certs.add(cert_lower)
+                certs_found.append(cert_text)
+                if len(certs_found) >= 5:
+                    break
+        if len(certs_found) >= 5:
+            break
+    
+    metadata["certifications"] = certs_found[:5]  # Limit to 5
+    
     return metadata
 
 
@@ -251,25 +500,34 @@ def get_embeddings():
         embedding_provider = os.getenv("EMBEDDING_MODEL", "openai")
         model_name = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
     
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    azure_key = os.getenv("AZURE_OPENAI_KEY")
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT"))
-    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+    # Use separate embedding deployment (different from chat model)
+    azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "").strip()
+    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview").strip()
     
-    # Try Azure OpenAI embeddings first if available
-    if (embedding_provider == "azure_openai" or azure_key) and azure_endpoint and azure_deployment:
+    # Remove trailing slash from endpoint if present
+    if azure_endpoint and azure_endpoint.endswith('/'):
+        azure_endpoint = azure_endpoint.rstrip('/')
+    
+    # Try Azure OpenAI embeddings ONLY if separate embedding deployment is configured
+    # Note: Chat models (like gpt-4.1) cannot be used for embeddings
+    if (embedding_provider == "azure_openai" or azure_key) and azure_endpoint and azure_embedding_deployment:
         try:
             from langchain_openai import AzureOpenAIEmbeddings
-            logger.info(f"Using Azure OpenAI embeddings: {azure_deployment} at {azure_endpoint}")
+            logger.info(f"Using Azure OpenAI embeddings: {azure_embedding_deployment} at {azure_endpoint}")
             return AzureOpenAIEmbeddings(
-                azure_deployment=azure_deployment,
+                azure_deployment=azure_embedding_deployment,
                 azure_endpoint=azure_endpoint,
                 api_key=azure_key,
                 api_version=azure_api_version
             )
         except Exception as e:
-            logger.warning(f"Failed to initialize Azure OpenAI embeddings: {e}, falling back")
+            logger.warning(f"Failed to initialize Azure OpenAI embeddings: {e}, falling back to local")
+    elif azure_key and azure_endpoint and not azure_embedding_deployment:
+        # Azure key exists but no embedding deployment - use local embeddings
+        logger.info("Azure OpenAI key found but no embedding deployment configured. Using local HuggingFace embeddings.")
     
     # Try standard OpenAI embeddings
     if embedding_provider == "openai" and openai_api_key:
@@ -312,10 +570,14 @@ def get_llm():
         temperature = 0
     
     # Azure OpenAI (priority check since user has this)
-    azure_key = os.getenv("AZURE_OPENAI_KEY")
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
+    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview").strip()
+    
+    # Remove trailing slash from endpoint if present
+    if azure_endpoint and azure_endpoint.endswith('/'):
+        azure_endpoint = azure_endpoint.rstrip('/')
     
     if provider == "azure_openai" or (azure_key and azure_endpoint and azure_deployment):
         if azure_key and azure_endpoint and azure_deployment:
@@ -330,6 +592,7 @@ def get_llm():
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize Azure OpenAI LLM: {e}")
+                logger.error(f"Azure Key present: {bool(azure_key)}, Endpoint: {azure_endpoint}, Deployment: {azure_deployment}")
     
     # OpenAI (standard)
     if provider == "openai":

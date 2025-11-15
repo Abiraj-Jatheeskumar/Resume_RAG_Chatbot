@@ -6,8 +6,8 @@ from typing import Optional
 from dotenv import load_dotenv
 import logging
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override to ensure latest values)
+load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +32,7 @@ class Config:
     AZURE_OPENAI_KEY: Optional[str] = os.getenv("AZURE_OPENAI_KEY")
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_DEPLOYMENT: Optional[str] = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT: Optional[str] = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
     
     # Model Configuration

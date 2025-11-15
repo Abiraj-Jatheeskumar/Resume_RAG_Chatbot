@@ -125,7 +125,13 @@ def process_uploaded_pdfs(uploaded_files: List, use_ocr: bool = False):
                             "name": metadata["name"],
                             "email": metadata["email"],
                             "phone": metadata["phone"],
-                            "skills": ", ".join(metadata["skills"])
+                            "skills": ", ".join(metadata["skills"]),
+                            "years_experience": metadata.get("years_experience", 0),
+                            "education_level": metadata.get("education_level", ""),
+                            "job_titles": ", ".join(metadata.get("job_titles", [])),
+                            "companies": ", ".join(metadata.get("companies", [])),
+                            "location": metadata.get("location", ""),
+                            "certifications": ", ".join(metadata.get("certifications", []))
                         }
                     )
                     documents.append(doc)
@@ -137,19 +143,29 @@ def process_uploaded_pdfs(uploaded_files: List, use_ocr: bool = False):
         if documents:
             status_text.text("Creating vector store...")
             
+            # Check if persistence is enabled (disabled by default for multi-user)
+            enable_persistence = os.getenv("ENABLE_PERSISTENCE", "false").lower() == "true"
+            
             # Create or update vector store
             if st.session_state.vector_store is None:
+                # Only save to disk if persistence is enabled
+                persist_dir = VECTOR_STORE_DIR if enable_persistence else None
                 st.session_state.vector_store = create_vector_store(
-                    documents, embeddings, VECTOR_STORE_DIR
+                    documents, embeddings, persist_dir
                 )
             else:
                 # Add new documents to existing store
                 st.session_state.vector_store.add_documents(documents)
-                st.session_state.vector_store.save_local(VECTOR_STORE_DIR)
+                # Only save to disk if persistence is enabled
+                if enable_persistence:
+                    st.session_state.vector_store.save_local(VECTOR_STORE_DIR)
             
-            # Update metadata
+            # Update metadata (session state only)
             st.session_state.metadata_list.extend(metadata_list)
-            save_metadata(st.session_state.metadata_list, METADATA_FILE)
+            
+            # Only save to disk if persistence is enabled
+            if enable_persistence:
+                save_metadata(st.session_state.metadata_list, METADATA_FILE)
             
             st.session_state.documents_processed = True
             status_text.text("✅ All resumes processed successfully!")
@@ -169,7 +185,30 @@ def process_uploaded_pdfs(uploaded_files: List, use_ocr: bool = False):
 
 
 def load_existing_store():
-    """Load existing vector store if available."""
+    """Load existing vector store if available (only if persistence is enabled)."""
+    # Check if persistence is enabled (disabled by default for multi-user deployments)
+    enable_persistence = os.getenv("ENABLE_PERSISTENCE", "false").lower() == "true"
+    
+    # On Streamlit Cloud or multi-user deployments, disable persistence by default
+    if not enable_persistence:
+        # Clear any existing persistent data to prevent cross-user data leakage
+        if os.path.exists(VECTOR_STORE_DIR):
+            try:
+                shutil.rmtree(VECTOR_STORE_DIR)
+                logger.info("Cleared persistent vector store (persistence disabled)")
+            except Exception as e:
+                logger.warning(f"Could not clear vector store: {e}")
+        
+        if os.path.exists(METADATA_FILE):
+            try:
+                os.remove(METADATA_FILE)
+                logger.info("Cleared persistent metadata (persistence disabled)")
+            except Exception as e:
+                logger.warning(f"Could not clear metadata: {e}")
+        
+        return  # Don't load persistent data
+    
+    # Only load if persistence is explicitly enabled
     try:
         embeddings = initialize_embeddings()
         
@@ -185,12 +224,9 @@ def load_existing_store():
                     st.session_state.metadata_list = loaded_metadata
                     logger.info(f"Loaded {len(loaded_metadata)} candidates from metadata file")
     except ImportError as e:
-        # Don't fail on startup if embeddings can't be initialized
-        # User will see error when they try to upload files
         logger.warning(f"Import error in load_existing_store: {e}")
         pass
     except Exception as e:
-        # Other errors - log but don't crash
         logger.error(f"Error loading existing store: {e}")
         pass
 
@@ -330,123 +366,1127 @@ def filter_candidates(name_filter: str = "", skill_filter: str = "") -> List[Dic
 
 
 def show_analytics():
-    """Display analytics dashboard."""
+    """Display enhanced analytics dashboard with detailed insights."""
     if not st.session_state.metadata_list:
-        st.info("Upload resumes to see analytics.")
+        st.info("📤 Upload resumes to see analytics.")
         return
     
-    # Show total count prominently
     total_count = len(st.session_state.metadata_list)
-    st.subheader(f"📊 Analytics Dashboard - {total_count} Candidate(s)")
     
-    # Debug info in expander
-    with st.expander("🔍 Debug Info"):
-        st.write(f"**Total Candidates in System:** {total_count}")
-        st.write(f"**Candidates List:**")
-        for idx, candidate in enumerate(st.session_state.metadata_list, 1):
-            st.write(f"{idx}. {candidate.get('name', candidate.get('filename', 'Unknown'))} ({candidate.get('filename', 'N/A')})")
+    # Header with summary
+    st.markdown("## 📊 Analytics Dashboard")
+    st.markdown(f"**Total Candidates Analyzed:** {total_count}")
+    st.divider()
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Key Metrics - Enhanced with more details and mobile responsive
+    st.markdown("### 📈 Key Metrics")
+    
+    # Responsive columns: 5 on desktop, 2 on tablet, 1 on mobile
+    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
     
     with col1:
-        st.metric("Total Candidates", len(st.session_state.metadata_list))
+        st.metric(
+            label="👥 Total Candidates",
+            value=total_count,
+            help="Total number of resumes processed"
+        )
     
     with col2:
         total_skills = sum(len(c.get("skills", [])) for c in st.session_state.metadata_list)
-        avg_skills = total_skills / len(st.session_state.metadata_list) if st.session_state.metadata_list else 0
-        st.metric("Avg Skills per Candidate", f"{avg_skills:.1f}")
+        avg_skills = total_skills / total_count if total_count > 0 else 0
+        st.metric(
+            label="🛠️ Avg Skills",
+            value=f"{avg_skills:.1f}",
+            help="Average number of skills per candidate"
+        )
     
     with col3:
         with_emails = sum(1 for c in st.session_state.metadata_list if c.get("email"))
-        st.metric("With Email", f"{with_emails}/{len(st.session_state.metadata_list)}")
+        email_pct = (with_emails / total_count * 100) if total_count > 0 else 0
+        st.metric(
+            label="📧 With Email",
+            value=f"{with_emails}/{total_count}",
+            delta=f"{email_pct:.0f}%",
+            delta_color="normal",
+            help="Candidates with email addresses"
+        )
     
     with col4:
         with_phones = sum(1 for c in st.session_state.metadata_list if c.get("phone"))
-        st.metric("With Phone", f"{with_phones}/{len(st.session_state.metadata_list)}")
-    
-    # Skills distribution chart
-    st.subheader("Skills Distribution")
-    skills_dist = get_skills_distribution(st.session_state.metadata_list)
-    if skills_dist:
-        # Get top 15 skills
-        top_skills = sorted(skills_dist.items(), key=lambda x: x[1], reverse=True)[:15]
-        skills_df = pd.DataFrame(top_skills, columns=["Skill", "Count"])
-        
-        fig = px.bar(
-            skills_df,
-            x="Count",
-            y="Skill",
-            orientation='h',
-            title="Top 15 Skills Across All Candidates",
-            labels={"Count": "Number of Candidates", "Skill": "Skill Name"}
+        phone_pct = (with_phones / total_count * 100) if total_count > 0 else 0
+        st.metric(
+            label="📞 With Phone",
+            value=f"{with_phones}/{total_count}",
+            delta=f"{phone_pct:.0f}%",
+            delta_color="normal",
+            help="Candidates with phone numbers"
         )
-        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(fig, use_container_width=True)
     
-    # Candidate completeness
-    st.subheader("Candidate Data Completeness")
-    completeness_data = []
+    with col5:
+        total_unique_skills = len(get_skills_distribution(st.session_state.metadata_list))
+        st.metric(
+            label="🎯 Unique Skills",
+            value=total_unique_skills,
+            help="Total number of unique skills found"
+        )
+    
+    st.divider()
+    
+    # Skills Analysis Section - Mobile Responsive
+    st.markdown("### 🛠️ Skills Analysis")
+    skills_dist = get_skills_distribution(st.session_state.metadata_list)
+    
+    if skills_dist:
+        # Responsive columns: stack on mobile
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Top Skills Bar Chart
+            top_skills = sorted(skills_dist.items(), key=lambda x: x[1], reverse=True)[:20]
+            skills_df = pd.DataFrame(top_skills, columns=["Skill", "Count"])
+            
+            # Calculate percentage
+            skills_df["Percentage"] = (skills_df["Count"] / total_count * 100).round(1)
+            
+            fig = px.bar(
+                skills_df,
+                x="Count",
+                y="Skill",
+                orientation='h',
+                title="Top 20 Skills Distribution",
+                labels={"Count": "Number of Candidates", "Skill": "Skill Name"},
+                color="Count",
+                color_continuous_scale="Blues",
+                text="Count"
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(
+                height=600,
+                yaxis={'categoryorder': 'total ascending'},
+                xaxis_title="Number of Candidates",
+                yaxis_title="",
+                showlegend=False,
+                autosize=True
+            )
+            # Mobile responsive chart
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 📋 Top Skills List")
+            for idx, (skill, count) in enumerate(top_skills[:10], 1):
+                percentage = (count / total_count * 100)
+                st.markdown(f"""
+                **{idx}. {skill}**
+                - {count} candidate(s) ({percentage:.1f}%)
+                """)
+            
+            if len(top_skills) > 10:
+                with st.expander(f"View all {len(top_skills)} skills"):
+                    for idx, (skill, count) in enumerate(top_skills[10:], 11):
+                        percentage = (count / total_count * 100)
+                        st.markdown(f"**{idx}. {skill}** - {count} ({percentage:.1f}%)")
+    
+    st.divider()
+    
+    # Candidate Completeness Section
+    st.markdown("### ✅ Candidate Profile Completeness")
     
     # Patterns that indicate invalid names
     invalid_name_patterns = [
-        r'CERTIFICATE',
-        r'RESUME',
-        r'CV',
-        r'CURRICULUM',
-        r'VITAE',
-        r'APPLICATION',
-        r'PAGE \d+',
-        r'^\d+$',  # Just numbers
+        r'CERTIFICATE', r'RESUME', r'CV', r'CURRICULUM', r'VITAE',
+        r'APPLICATION', r'PAGE \d+', r'^\d+$',
     ]
+    
+    completeness_data = []
+    completeness_details = []
     
     for candidate in st.session_state.metadata_list:
         score = 0
+        details = {"name": False, "email": False, "phone": False, "skills": False}
         name = candidate.get("name", "").strip()
         
-        # Check if name is valid (not empty and not a header)
+        # Check if name is valid
         is_valid_name = False
         if name:
             name_upper = name.upper()
             is_valid_name = not any(re.search(pattern, name_upper) for pattern in invalid_name_patterns)
-            # Also check if it's too short or looks like a filename
             if len(name.split()) < 1 or len(name) < 3:
                 is_valid_name = False
         
         if is_valid_name:
             score += 1
+            details["name"] = True
         if candidate.get("email"):
             score += 1
+            details["email"] = True
         if candidate.get("phone"):
             score += 1
+            details["phone"] = True
         if candidate.get("skills") and len(candidate.get("skills", [])) > 0:
             score += 1
+            details["skills"] = True
         
-        # Use filename if name is invalid
         display_name = name if is_valid_name else candidate.get("filename", "Unknown")
         completeness_data.append({
             "Candidate": display_name,
             "Completeness Score": score,
-            "Max Score": 4
+            "Max Score": 4,
+            "Percentage": (score / 4 * 100)
         })
+        completeness_details.append({
+            "Candidate": display_name,
+            **details
+        })
+    
+    # Initialize variables for summary stats
+    completeness_df = None
+    avg_completeness = 0
+    perfect_profiles = 0
     
     if completeness_data:
         completeness_df = pd.DataFrame(completeness_data)
         completeness_df = completeness_df.sort_values("Completeness Score", ascending=False)
+        avg_completeness = completeness_df["Completeness Score"].mean()
+        perfect_profiles = len(completeness_df[completeness_df["Completeness Score"] == 4])
+        
+        # Responsive columns
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Enhanced completeness chart - mobile responsive
+            fig = px.bar(
+                completeness_df,
+                x="Candidate",
+                y="Completeness Score",
+                title="Candidate Profile Completeness Score",
+                labels={"Candidate": "Candidate Name", "Completeness Score": "Score (out of 4)"},
+                color="Completeness Score",
+                color_continuous_scale=["#ff4444", "#ffaa00", "#ffdd00", "#88ff00", "#00ff00"],
+                text="Completeness Score"
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(
+                height=500,
+                xaxis_tickangle=-45,
+                xaxis_title="",
+                yaxis_title="Completeness Score (out of 4)",
+                showlegend=False,
+                autosize=True
+            )
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 📊 Completeness Stats")
+            st.metric("Average Score", f"{avg_completeness:.2f}/4.0")
+            st.metric("Complete Profiles", f"{perfect_profiles}/{total_count}")
+            
+            incomplete = len(completeness_df[completeness_df["Completeness Score"] < 4])
+            st.metric("Incomplete Profiles", f"{incomplete}/{total_count}")
+            
+            st.divider()
+            st.markdown("#### 📋 Details")
+            with st.expander("View Completeness Details"):
+                details_df = pd.DataFrame(completeness_details)
+                st.dataframe(details_df, width='stretch', hide_index=True)
+    
+    st.divider()
+    
+    # Skills Categories Analysis
+    st.markdown("### 🎯 Skills Categories")
+    
+    # Categorize skills
+    skill_categories = {
+        "Programming Languages": ["Python", "JavaScript", "Java", "C++", "C#", "TypeScript", "Go", "Rust", "Swift", "Kotlin", "PHP", "Ruby"],
+        "Web Frameworks": ["React", "Angular", "Vue", "Django", "Flask", "Node.js", "Spring", ".NET"],
+        "Databases": ["SQL", "MongoDB", "PostgreSQL", "MySQL"],
+        "Cloud & DevOps": ["AWS", "Docker", "Kubernetes", "Linux", "Git"],
+        "Machine Learning": ["Machine Learning", "Deep Learning", "TensorFlow", "PyTorch"],
+        "Frontend": ["HTML", "CSS"],
+        "Other": []
+    }
+    
+    categorized_skills = {cat: [] for cat in skill_categories.keys()}
+    
+    for skill, count in skills_dist.items():
+        categorized = False
+        for category, keywords in skill_categories.items():
+            if any(keyword.lower() in skill.lower() for keyword in keywords):
+                categorized_skills[category].append((skill, count))
+                categorized = True
+                break
+        if not categorized:
+            categorized_skills["Other"].append((skill, count))
+    
+    # Create pie chart for skill categories
+    category_counts = {cat: len(skills) for cat, skills in categorized_skills.items() if skills}
+    
+    if category_counts:
+        # Responsive columns: stack on mobile
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            fig_pie = px.pie(
+                values=list(category_counts.values()),
+                names=list(category_counts.keys()),
+                title="Skills by Category Distribution",
+                hole=0.4
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie.update_layout(height=400, autosize=True)
+            st.plotly_chart(fig_pie, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 📊 Category Breakdown")
+            for category, skills_list in categorized_skills.items():
+                if skills_list:
+                    total_in_category = sum(count for _, count in skills_list)
+                    st.markdown(f"""
+                    **{category}**
+                    - {len(skills_list)} unique skill(s)
+                    - {total_in_category} total mentions
+                    """)
+    
+    st.divider()
+    
+    # ========== RECRUITMENT-FOCUSED ANALYTICS ==========
+    st.markdown("## 🏢 Recruitment Analytics (ATS-Style)")
+    st.markdown("**Professional metrics used by HR departments and recruiters**")
+    st.divider()
+    
+    # Experience Level Distribution
+    st.markdown("### 📊 Experience Level Distribution")
+    experience_data = []
+    for candidate in st.session_state.metadata_list:
+        years = candidate.get("years_experience", 0)
+        if years > 0:
+            experience_data.append(years)
+    
+    if experience_data:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Experience histogram
+            exp_df = pd.DataFrame({"Years of Experience": experience_data})
+            fig = px.histogram(
+                exp_df,
+                x="Years of Experience",
+                nbins=10,
+                title="Years of Experience Distribution",
+                labels={"Years of Experience": "Years", "count": "Number of Candidates"},
+                color_discrete_sequence=['#1f77b4']
+            )
+            fig.update_layout(height=400, showlegend=False, autosize=True)
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 📈 Experience Stats")
+            avg_exp = sum(experience_data) / len(experience_data) if experience_data else 0
+            st.metric("Average Experience", f"{avg_exp:.1f} years")
+            
+            # Categorize experience levels
+            entry_level = sum(1 for y in experience_data if 0 < y <= 2)
+            mid_level = sum(1 for y in experience_data if 2 < y <= 5)
+            senior_level = sum(1 for y in experience_data if 5 < y <= 10)
+            expert_level = sum(1 for y in experience_data if y > 10)
+            
+            st.markdown(f"""
+            **Experience Levels:**
+            - 🟢 Entry (0-2 yrs): {entry_level}
+            - 🟡 Mid (3-5 yrs): {mid_level}
+            - 🟠 Senior (6-10 yrs): {senior_level}
+            - 🔴 Expert (10+ yrs): {expert_level}
+            """)
+    
+    st.divider()
+    
+    # Education Level Breakdown
+    st.markdown("### 🎓 Education Level Breakdown")
+    education_data = {}
+    for candidate in st.session_state.metadata_list:
+        edu = candidate.get("education_level", "Not Specified")
+        education_data[edu] = education_data.get(edu, 0) + 1
+    
+    if education_data:
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            edu_df = pd.DataFrame(list(education_data.items()), columns=["Education Level", "Count"])
+            fig = px.pie(
+                edu_df,
+                values="Count",
+                names="Education Level",
+                title="Education Distribution",
+                hole=0.4
+            )
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            fig.update_layout(height=400, autosize=True)
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 📚 Education Details")
+            for edu_level, count in sorted(education_data.items(), key=lambda x: x[1], reverse=True):
+                percentage = (count / total_count * 100)
+                st.markdown(f"**{edu_level}**: {count} candidates ({percentage:.1f}%)")
+    
+    st.divider()
+    
+    # Job Title Distribution
+    st.markdown("### 💼 Job Title Distribution")
+    all_titles = []
+    for candidate in st.session_state.metadata_list:
+        titles = candidate.get("job_titles", [])
+        all_titles.extend(titles)
+    
+    if all_titles:
+        title_counts = {}
+        for title in all_titles:
+            # Normalize title (take first part if too long)
+            title_normalized = title.split()[0] if len(title.split()) > 0 else title
+            title_counts[title_normalized] = title_counts.get(title_normalized, 0) + 1
+        
+        top_titles = sorted(title_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            titles_df = pd.DataFrame(top_titles, columns=["Job Title", "Count"])
+            fig = px.bar(
+                titles_df,
+                x="Count",
+                y="Job Title",
+                orientation='h',
+                title="Top 15 Job Titles",
+                labels={"Count": "Number of Candidates", "Job Title": ""},
+                color="Count",
+                color_continuous_scale="Viridis"
+            )
+            fig.update_layout(
+                height=500,
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False,
+                autosize=True
+            )
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 💼 Top Titles")
+            for idx, (title, count) in enumerate(top_titles[:10], 1):
+                st.markdown(f"**{idx}. {title}** - {count}")
+    
+    st.divider()
+    
+    # Top Companies
+    st.markdown("### 🏛️ Previous Companies")
+    all_companies = []
+    for candidate in st.session_state.metadata_list:
+        companies = candidate.get("companies", [])
+        all_companies.extend(companies)
+    
+    if all_companies:
+        company_counts = {}
+        for company in all_companies:
+            company_counts[company] = company_counts.get(company, 0) + 1
+        
+        top_companies = sorted(company_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            companies_df = pd.DataFrame(top_companies, columns=["Company", "Count"])
+            fig = px.bar(
+                companies_df,
+                x="Company",
+                y="Count",
+                title="Top Companies (Previous Employers)",
+                labels={"Count": "Number of Candidates", "Company": "Company Name"},
+                color="Count",
+                color_continuous_scale="Blues"
+            )
+            fig.update_layout(height=400, xaxis_tickangle=-45, showlegend=False, autosize=True)
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 🏢 Company List")
+            for idx, (company, count) in enumerate(top_companies, 1):
+                percentage = (count / total_count * 100)
+                st.markdown(f"**{idx}. {company}**")
+                st.markdown(f"   - {count} candidate(s) ({percentage:.1f}%)")
+    
+    st.divider()
+    
+    # Certifications
+    st.markdown("### 🏆 Certifications & Credentials")
+    all_certs = []
+    for candidate in st.session_state.metadata_list:
+        certs = candidate.get("certifications", [])
+        all_certs.extend(certs)
+    
+    if all_certs:
+        cert_counts = {}
+        for cert in all_certs:
+            cert_counts[cert] = cert_counts.get(cert, 0) + 1
+        
+        top_certs = sorted(cert_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            certs_df = pd.DataFrame(top_certs, columns=["Certification", "Count"])
+            fig = px.bar(
+                certs_df,
+                x="Certification",
+                y="Count",
+                title="Certifications Distribution",
+                labels={"Count": "Number of Candidates", "Certification": "Certification Name"},
+                color="Count",
+                color_continuous_scale="Greens"
+            )
+            fig.update_layout(height=400, xaxis_tickangle=-45, showlegend=False, autosize=True)
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 🎖️ Top Certifications")
+            for idx, (cert, count) in enumerate(top_certs[:10], 1):
+                percentage = (count / total_count * 100)
+                st.markdown(f"**{idx}. {cert}**")
+                st.markdown(f"   - {count} ({percentage:.1f}%)")
+    else:
+        st.info("No certifications found in resumes.")
+    
+    st.divider()
+    
+    # Candidate Ranking/Scoring System
+    st.markdown("### ⭐ Candidate Ranking & Fit Score")
+    st.markdown("**ATS-style scoring based on profile completeness and experience**")
+    
+    ranked_candidates = []
+    for candidate in st.session_state.metadata_list:
+        score = 0
+        details = {}
+        
+        # Name (10 points)
+        name = candidate.get("name", "").strip()
+        is_valid_name = False
+        if name:
+            name_upper = name.upper()
+            invalid_patterns = [r'CERTIFICATE', r'RESUME', r'CV', r'CURRICULUM', r'VITAE']
+            is_valid_name = not any(re.search(pattern, name_upper) for pattern in invalid_patterns)
+            if len(name.split()) < 1 or len(name) < 3:
+                is_valid_name = False
+        
+        if is_valid_name:
+            score += 10
+            details["name"] = "✓"
+        else:
+            details["name"] = "✗"
+        
+        # Contact info (20 points)
+        if candidate.get("email"):
+            score += 10
+            details["email"] = "✓"
+        else:
+            details["email"] = "✗"
+        
+        if candidate.get("phone"):
+            score += 10
+            details["phone"] = "✓"
+        else:
+            details["phone"] = "✗"
+        
+        # Skills (20 points)
+        skills_count = len(candidate.get("skills", []))
+        if skills_count > 0:
+            score += min(20, skills_count * 2)  # 2 points per skill, max 20
+            details["skills"] = f"{skills_count} skills"
+        else:
+            details["skills"] = "0 skills"
+        
+        # Experience (25 points)
+        years_exp = candidate.get("years_experience", 0)
+        if years_exp > 0:
+            score += min(25, years_exp * 2.5)  # 2.5 points per year, max 25
+            details["experience"] = f"{years_exp} years"
+        else:
+            details["experience"] = "N/A"
+        
+        # Education (15 points)
+        if candidate.get("education_level"):
+            score += 15
+            details["education"] = candidate.get("education_level")
+        else:
+            details["education"] = "N/A"
+        
+        # Certifications (10 points)
+        certs_count = len(candidate.get("certifications", []))
+        if certs_count > 0:
+            score += min(10, certs_count * 2)  # 2 points per cert, max 10
+            details["certifications"] = f"{certs_count} certs"
+        else:
+            details["certifications"] = "0 certs"
+        
+        display_name = name if is_valid_name else candidate.get("filename", "Unknown")
+        ranked_candidates.append({
+            "Candidate": display_name,
+            "Fit Score": round(score, 1),
+            "Max Score": 100,
+            "Experience": details["experience"],
+            "Education": details["education"],
+            "Skills": details["skills"],
+            "Certs": details["certifications"],
+            "Contact": f"{details['email']} {details['phone']}"
+        })
+    
+    if ranked_candidates:
+        ranked_df = pd.DataFrame(ranked_candidates)
+        ranked_df = ranked_df.sort_values("Fit Score", ascending=False)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            fig = px.bar(
+                ranked_df,
+                x="Candidate",
+                y="Fit Score",
+                title="Candidate Fit Score Ranking (0-100)",
+                labels={"Candidate": "Candidate Name", "Fit Score": "Fit Score"},
+                color="Fit Score",
+                color_continuous_scale=["#ff4444", "#ffaa00", "#88ff00", "#00ff00"],
+                text="Fit Score"
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(
+                height=500,
+                xaxis_tickangle=-45,
+                yaxis_range=[0, 100],
+                showlegend=False,
+                autosize=True
+            )
+            st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+        
+        with col2:
+            st.markdown("#### 🏆 Top Candidates")
+            for rank, (idx, row) in enumerate(ranked_df.head(10).iterrows(), 1):
+                st.markdown(f"""
+                **#{rank} {row['Candidate']}**
+                - Score: **{row['Fit Score']}/100**
+                - Exp: {row['Experience']}
+                - Edu: {row['Education']}
+                """)
+            
+            st.divider()
+            avg_score = ranked_df["Fit Score"].mean()
+            st.metric("Average Fit Score", f"{avg_score:.1f}/100")
+            
+            top_25_pct = len(ranked_df[ranked_df["Fit Score"] >= 75])
+            st.metric("High Fit (75+)", f"{top_25_pct}/{total_count}")
+        
+        # Detailed ranking table
+        st.markdown("#### 📋 Detailed Ranking Table")
+        st.dataframe(
+            ranked_df[["Candidate", "Fit Score", "Experience", "Education", "Skills", "Certs", "Contact"]],
+            width='stretch',
+            hide_index=True,
+            height=400
+        )
+    
+    st.divider()
+    
+    # Location Distribution (if available)
+    locations = [c.get("location", "") for c in st.session_state.metadata_list if c.get("location")]
+    if locations:
+        st.markdown("### 📍 Location Distribution")
+        location_counts = {}
+        for loc in locations:
+            location_counts[loc] = location_counts.get(loc, 0) + 1
+        
+        top_locations = sorted(location_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        loc_df = pd.DataFrame(top_locations, columns=["Location", "Count"])
         
         fig = px.bar(
-            completeness_df,
-            x="Candidate",
-            y="Completeness Score",
-            title="Candidate Profile Completeness",
-            labels={"Candidate": "Candidate Name", "Completeness Score": "Score (out of 4)"}
+            loc_df,
+            x="Location",
+            y="Count",
+            title="Top Candidate Locations",
+            labels={"Count": "Number of Candidates", "Location": "City, State"},
+            color="Count",
+            color_continuous_scale="Purples"
         )
-        fig.update_layout(height=400, xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(height=400, xaxis_tickangle=-45, showlegend=False, autosize=True)
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
+    
+    st.divider()
+    
+    # Candidate Details Table
+    st.markdown("### 👥 Candidate Details")
+    
+    # Patterns that indicate invalid names
+    invalid_name_patterns = [
+        r'CERTIFICATE', r'RESUME', r'CV', r'CURRICULUM', r'VITAE',
+        r'APPLICATION', r'PAGE \d+', r'^\d+$',
+    ]
+    
+    candidates_table_data = []
+    for candidate in st.session_state.metadata_list:
+        name = candidate.get("name", "").strip()
+        is_valid_name = False
+        if name:
+            name_upper = name.upper()
+            is_valid_name = not any(re.search(pattern, name_upper) for pattern in invalid_name_patterns)
+            if len(name.split()) < 1 or len(name) < 3:
+                is_valid_name = False
+        
+        display_name = name if is_valid_name else candidate.get("filename", "Unknown")
+        
+        candidates_table_data.append({
+            "Name": display_name,
+            "Email": candidate.get("email", "N/A"),
+            "Phone": candidate.get("phone", "N/A"),
+            "Experience": f"{candidate.get('years_experience', 0)} yrs" if candidate.get('years_experience', 0) > 0 else "N/A",
+            "Education": candidate.get("education_level", "N/A"),
+            "Job Title": ", ".join(candidate.get("job_titles", [])[:2]) if candidate.get("job_titles") else "N/A",
+            "Company": ", ".join(candidate.get("companies", [])[:2]) if candidate.get("companies") else "N/A",
+            "Location": candidate.get("location", "N/A"),
+            "Skills Count": len(candidate.get("skills", [])),
+            "Skills": ", ".join(candidate.get("skills", [])[:5]) + ("..." if len(candidate.get("skills", [])) > 5 else ""),
+            "Certifications": ", ".join(candidate.get("certifications", [])) if candidate.get("certifications") else "N/A",
+            "Filename": candidate.get("filename", "N/A")
+        })
+    
+    candidates_df = pd.DataFrame(candidates_table_data)
+    st.dataframe(
+        candidates_df,
+        width='stretch',
+        hide_index=True,
+        height=400
+    )
+    
+    # Summary Statistics - Mobile Responsive
+    st.divider()
+    st.markdown("### 📈 Summary Statistics")
+    
+    # Responsive columns: 3 on desktop, 1 on mobile
+    col1, col2, col3 = st.columns(3)
+    
+    # Calculate summary stats
+    valid_names_count = sum(1 for c in candidates_table_data if c["Name"] != "Unknown" and c["Name"] != c["Filename"])
+    
+    with col1:
+        st.markdown("""
+        **Contact Information:**
+        - 📧 Email coverage: {:.1f}%
+        - 📞 Phone coverage: {:.1f}%
+        - ✅ Complete profiles: {:.1f}%
+        """.format(
+            (with_emails / total_count * 100) if total_count > 0 else 0,
+            (with_phones / total_count * 100) if total_count > 0 else 0,
+            (perfect_profiles / total_count * 100) if total_count > 0 else 0
+        ))
+    
+    with col2:
+        st.markdown("""
+        **Skills Analysis:**
+        - 🎯 Unique skills: {}
+        - 📊 Total skill mentions: {}
+        - 📈 Avg skills per candidate: {:.1f}
+        """.format(
+            total_unique_skills,
+            total_skills,
+            avg_skills
+        ))
+    
+    with col3:
+        st.markdown("""
+        **Data Quality:**
+        - ✅ Valid names: {}/{}
+        - 📄 Total resumes: {}
+        - 🎯 Avg completeness: {:.1f}/4.0
+        """.format(
+            valid_names_count,
+            total_count,
+            total_count,
+            avg_completeness
+        ))
 
 
 # Main UI
 st.title("📄 Resume RAG Chatbot")
 st.markdown("Upload multiple resume PDFs and query them conversationally!")
+
+# Security Warning (for production)
+enable_persistence = os.getenv("ENABLE_PERSISTENCE", "false").lower() == "true"
+
+if os.getenv("SHOW_SECURITY_WARNING", "true").lower() == "true":
+    with st.expander("⚠️ Security & Privacy Notice", expanded=False):
+        if enable_persistence:
+            st.warning("""
+            **Important Security Information:**
+            
+            - 🔒 **Data Storage**: Resumes and metadata are stored in `./faiss_store/` and `./metadata.pkl`
+            - 📁 **Data Persistence**: ENABLED - Data persists after app restart (shared across users!)
+            - ⚠️ **No Encryption**: Currently stored in plain text (not encrypted)
+            - 🔐 **No Authentication**: Anyone with app URL can access (add authentication for production)
+            - 🗑️ **Data Deletion**: Use "Clear All Data" button to remove all stored information
+            
+            **For Production Use:**
+            - ✅ Add authentication system
+            - ✅ Encrypt sensitive data
+            - ✅ Use HTTPS/SSL
+            - ✅ Implement access control
+            
+            See `SECURITY_AND_DATA.md` for details.
+            """)
+        else:
+            st.info("""
+            **Privacy & Data Storage:**
+            
+            - ✅ **Session-Only Storage**: Data is stored in memory only (not saved to disk)
+            - ✅ **Private Sessions**: Each user's data is isolated (not shared with other users)
+            - ✅ **Auto-Clear**: Data is cleared when you close the browser/refresh
+            - 🔒 **No Persistent Files**: Resumes are NOT saved to disk (prevents cross-user data access)
+            
+            **Note**: To enable persistent storage (saves data across sessions), set `ENABLE_PERSISTENCE=true` in environment variables.
+            """)
+
+# Add custom CSS for mobile responsiveness and better UI styling
+st.markdown("""
+<style>
+    /* Mobile responsiveness */
+    @media screen and (max-width: 768px) {
+        .main .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        [data-testid="stSidebar"] {
+            min-width: 100% !important;
+        }
+        
+        /* Chat messages mobile */
+        [data-testid="stChatMessage"] {
+            padding: 0.5rem !important;
+        }
+        
+        /* Analytics charts mobile */
+        .js-plotly-plot {
+            width: 100% !important;
+            height: auto !important;
+        }
+        
+        /* Tabs mobile */
+        [data-baseweb="tab-list"] {
+            flex-wrap: wrap;
+        }
+        
+        /* Metrics mobile */
+        [data-testid="stMetricValue"] {
+            font-size: 1.5rem !important;
+        }
+    }
+    
+    /* Sidebar styling - Dark theme to match main content */
+    [data-testid="stSidebar"] {
+        background: #262730 !important;
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar content area */
+    [data-testid="stSidebar"] > div:first-child {
+        background: #262730 !important;
+    }
+    
+    /* Sidebar text visibility - light text on dark background */
+    [data-testid="stSidebar"] * {
+        color: #fafafa !important;
+    }
+    
+    /* Override Streamlit's default sidebar background */
+    [data-testid="stSidebar"] .css-1d391kg {
+        background: #262730 !important;
+    }
+    
+    /* Sidebar scrollbar - dark theme */
+    [data-testid="stSidebar"]::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    [data-testid="stSidebar"]::-webkit-scrollbar-track {
+        background: #1e1e24;
+    }
+    
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb {
+        background: #4a4a5a;
+        border-radius: 4px;
+    }
+    
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover {
+        background: #5a5a6a;
+    }
+    
+    /* Sidebar headers - light color */
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h4 {
+        color: #4fc3f7 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Sidebar markdown text - light color */
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar input fields - dark theme */
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] textarea,
+    [data-testid="stSidebar"] select {
+        background: #1e1e24 !important;
+        color: #fafafa !important;
+        border: 1px solid #4a4a5a !important;
+    }
+    
+    /* Sidebar input focus - light blue accent */
+    [data-testid="stSidebar"] input:focus,
+    [data-testid="stSidebar"] textarea:focus,
+    [data-testid="stSidebar"] select:focus {
+        border: 2px solid #4fc3f7 !important;
+        box-shadow: 0 0 0 0.2rem rgba(79, 195, 247, 0.25) !important;
+        background: #2a2a35 !important;
+    }
+    
+    /* Sidebar input placeholders */
+    [data-testid="stSidebar"] input::placeholder,
+    [data-testid="stSidebar"] textarea::placeholder {
+        color: #9e9e9e !important;
+    }
+    
+    /* Sidebar buttons */
+    [data-testid="stSidebar"] button {
+        color: #ffffff !important;
+    }
+    
+    /* Sidebar button hover states */
+    [data-testid="stSidebar"] button:hover {
+        opacity: 0.9;
+    }
+    
+    /* Sidebar info boxes - dark theme */
+    [data-testid="stSidebar"] .stAlert {
+        background: #1e1e24 !important;
+        border: 1px solid #4a4a5a !important;
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar success messages - dark theme */
+    [data-testid="stSidebar"] .stSuccess {
+        background: #1e4620 !important;
+        color: #81c784 !important;
+        border: 1px solid #4caf50 !important;
+    }
+    
+    /* Sidebar info messages - dark theme */
+    [data-testid="stSidebar"] .stInfo {
+        background: #0d3a5f !important;
+        color: #64b5f6 !important;
+        border: 1px solid #2196f3 !important;
+    }
+    
+    /* Sidebar warning messages - dark theme */
+    [data-testid="stSidebar"] .stWarning {
+        background: #5d4037 !important;
+        color: #ffb74d !important;
+        border: 1px solid #ff9800 !important;
+    }
+    
+    /* Sidebar error messages - dark theme */
+    [data-testid="stSidebar"] .stError {
+        background: #5f2120 !important;
+        color: #e57373 !important;
+        border: 1px solid #f44336 !important;
+    }
+    
+    /* Sidebar metrics - light text */
+    [data-testid="stSidebar"] [data-testid="stMetricLabel"],
+    [data-testid="stSidebar"] [data-testid="stMetricValue"] {
+        color: #fafafa !important;
+        font-weight: 500 !important;
+    }
+    
+    /* Sidebar captions - lighter gray */
+    [data-testid="stSidebar"] .stCaption {
+        color: #b0b0b0 !important;
+    }
+    
+    /* Sidebar expanders - dark theme */
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        background: #1e1e24 !important;
+        border: 1px solid #4a4a5a !important;
+        border-radius: 0.5rem !important;
+    }
+    
+    /* Sidebar expander header */
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        background: #1e1e24 !important;
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar expander content */
+    [data-testid="stSidebar"] [data-testid="stExpander"] div {
+        background: #1e1e24 !important;
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar dividers - lighter for visibility */
+    [data-testid="stSidebar"] hr {
+        border-color: #4a4a5a !important;
+        border-width: 1px !important;
+    }
+    
+    /* Sidebar section backgrounds */
+    [data-testid="stSidebar"] .element-container {
+        background: transparent !important;
+    }
+    
+    /* Sidebar file uploader - dark theme */
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] {
+        background: #1e1e24 !important;
+        border: 1px solid #4a4a5a !important;
+        border-radius: 0.5rem !important;
+        padding: 0.5rem !important;
+    }
+    
+    /* Sidebar checkboxes and radio buttons */
+    [data-testid="stSidebar"] input[type="checkbox"],
+    [data-testid="stSidebar"] input[type="radio"] {
+        accent-color: #4fc3f7 !important;
+    }
+    
+    /* Sidebar labels */
+    [data-testid="stSidebar"] label {
+        color: #fafafa !important;
+    }
+    
+    /* Sidebar select dropdowns */
+    [data-testid="stSidebar"] select option {
+        background: #1e1e24 !important;
+        color: #fafafa !important;
+    }
+    
+    /* Better spacing for sidebar sections */
+    .sidebar-section {
+        margin-bottom: 1.5rem;
+    }
+    
+    /* Chat interface styling */
+    [data-testid="stChatMessage"] {
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border-radius: 0.5rem;
+    }
+    
+    /* Chat input styling */
+    [data-testid="stChatInput"] {
+        position: sticky;
+        bottom: 0;
+        background: white;
+        padding: 1rem;
+        border-top: 1px solid #e0e0e0;
+        z-index: 100;
+    }
+    
+    /* Source documents expander */
+    [data-testid="stExpander"] {
+        margin: 0.5rem 0;
+    }
+    
+    /* Analytics charts responsive */
+    .js-plotly-plot {
+        max-width: 100%;
+        height: auto;
+    }
+    
+    /* Metrics cards */
+    [data-testid="stMetricContainer"] {
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        background: #f8f9fa;
+        margin: 0.5rem 0;
+    }
+    
+    /* Tab styling */
+    [data-baseweb="tab"] {
+        padding: 0.75rem 1.5rem;
+        font-weight: 500;
+    }
+    
+    /* Better button spacing */
+    button[kind="primary"] {
+        margin: 0.5rem 0;
+    }
+    
+    /* Analytics section mobile */
+    @media screen and (max-width: 768px) {
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+        }
+        
+        /* Stack columns on mobile */
+        [data-testid="column"] {
+            width: 100% !important;
+            margin-bottom: 1rem;
+        }
+    }
+    
+    /* Chat message bubbles */
+    .stChatMessage {
+        animation: fadeIn 0.3s ease-in;
+    }
+    
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    /* Source document cards */
+    .source-doc-card {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+        border-left: 3px solid #1f77b4;
+    }
+    
+    /* Analytics section spacing */
+    .analytics-section {
+        margin: 1.5rem 0;
+    }
+    
+    /* Responsive tables */
+    @media screen and (max-width: 768px) {
+        [data-testid="stDataFrame"] {
+            font-size: 0.85rem;
+        }
+        
+        table {
+            display: block;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Check for API keys and display status
 try:
@@ -458,184 +1498,411 @@ except ImportError:
     llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 llm = get_llm()
-if llm:
-    # Check if Azure OpenAI is being used
-    azure_key = os.getenv("AZURE_OPENAI_KEY")
-    if azure_key:
-        st.sidebar.success(f"✅ Azure OpenAI LLM enabled - {llm_model}")
-    else:
-        st.sidebar.success(f"✅ {llm_provider.upper()} LLM enabled - {llm_model}")
-    st.sidebar.info("🤖 **Full RAG Mode**: AI will generate intelligent answers")
-else:
-    st.sidebar.warning("⚠️ **Basic Retrieval Mode** - No LLM provider")
-    st.sidebar.error("❌ Only showing raw document snippets (NOT full RAG)")
-    
-    # Check if Azure credentials exist but aren't working
-    azure_key = os.getenv("AZURE_OPENAI_KEY")
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    
-    if azure_key:
-        st.sidebar.info("💡 Azure OpenAI credentials detected - check configuration")
-    
-    with st.sidebar.expander("🔑 How to Enable Full RAG"):
-        st.markdown("""
-        **To enable AI-powered responses:**
-        
-        **Option 1: Azure OpenAI** (if you have credentials)
-        ```
-        AZURE_OPENAI_KEY=your-key
-        AZURE_OPENAI_ENDPOINT=your-endpoint
-        AZURE_OPENAI_DEPLOYMENT=your-deployment
-        AZURE_OPENAI_API_VERSION=2025-01-01-preview
-        ```
-        
-        **Option 2: Standard OpenAI**
-        1. Get API key from [platform.openai.com](https://platform.openai.com/api-keys)
-        2. Add to `.env`:
-        ```
-        OPENAI_API_KEY=sk-your-key-here
-        ```
-        
-        3. Restart the app
-        
-        **See OPENAI_SETUP.md for detailed instructions**
-        
-        💡 **Current Mode**: Basic Retrieval (no AI generation)
-        """)
 
-# Load existing store on startup
+# Load existing store on startup (only if persistence enabled)
 load_existing_store()
 
-# Sidebar
+# Enhanced Sidebar with perfect UI and mobile responsiveness
 with st.sidebar:
-    st.header("📤 Upload Resumes")
+    # App Logo/Header
+    st.markdown("""
+    <div style='text-align: center; padding: 1rem 0; border-bottom: 2px solid #e0e0e0; margin-bottom: 1.5rem;'>
+        <h2 style='margin: 0; color: #1f77b4;'>📄 Resume RAG</h2>
+        <p style='margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;'>Intelligent Candidate Analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # System Status Section
+    st.markdown("### 🔌 System Status")
+    
+    if llm:
+        azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
+        if azure_key:
+            st.success(f"✅ **Azure OpenAI**\n\n**Model:** {llm_model}\n\n**Status:** Active")
+        else:
+            st.success(f"✅ **{llm_provider.upper()}**\n\n**Model:** {llm_model}\n\n**Status:** Active")
+        st.info("🤖 **Full RAG Mode**\n\nAI-powered intelligent responses enabled")
+    else:
+        st.warning("⚠️ **Basic Retrieval Mode**\n\nNo LLM provider detected")
+        st.error("❌ **Limited Functionality**\n\nOnly showing document snippets")
+        
+        azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
+        if azure_key:
+            st.info("💡 Azure OpenAI credentials detected\n\nCheck configuration in `.env` file")
+        
+        with st.expander("🔑 Enable Full RAG", expanded=False):
+            st.markdown("""
+            **To enable AI-powered responses:**
+            
+            **Option 1: Azure OpenAI**
+            ```
+            AZURE_OPENAI_KEY=your-key
+            AZURE_OPENAI_ENDPOINT=your-endpoint
+            AZURE_OPENAI_DEPLOYMENT=your-deployment
+            ```
+            
+            **Option 2: Standard OpenAI**
+            ```
+            OPENAI_API_KEY=sk-your-key
+            ```
+            
+            See `OPENAI_SETUP.md` for details.
+            """)
+    
+    st.divider()
+    
+    # Quick Stats Section
+    total_candidates = len(st.session_state.metadata_list)
+    processed_docs = st.session_state.get("documents_processed", False)
+    
+    st.markdown("### 📊 Quick Stats")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Candidates", total_candidates, help="Total resumes loaded")
+    with col2:
+        status_icon = "✅" if processed_docs else "⏳"
+        st.metric("Status", status_icon, help="Processing status")
+    
+    if total_candidates > 0:
+        # Additional stats
+        with_emails = sum(1 for c in st.session_state.metadata_list if c.get("email"))
+        with_phones = sum(1 for c in st.session_state.metadata_list if c.get("phone"))
+        total_skills = sum(len(c.get("skills", [])) for c in st.session_state.metadata_list)
+        avg_skills = total_skills / total_candidates if total_candidates > 0 else 0
+        
+        st.markdown(f"""
+        **📧 Email:** {with_emails}/{total_candidates}  
+        **📞 Phone:** {with_phones}/{total_candidates}  
+        **🛠️ Avg Skills:** {avg_skills:.1f}
+        """)
+    
+    st.divider()
+    
+    # Upload Section
+    st.markdown("### 📤 Upload Resumes")
     
     uploaded_files = st.file_uploader(
-        "Upload PDF resumes",
+        "Choose PDF files",
         type=["pdf"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        help="Upload one or more resume PDFs. Supports multiple files at once."
     )
     
-    use_ocr = st.checkbox("Use OCR (slower, but better for scanned PDFs)")
+    if uploaded_files:
+        st.info(f"📎 **{len(uploaded_files)} file(s) selected**")
+        for file in uploaded_files[:3]:  # Show first 3
+            st.caption(f"• {file.name}")
+        if len(uploaded_files) > 3:
+            st.caption(f"... and {len(uploaded_files) - 3} more")
     
-    if st.button("Process Resumes", type="primary"):
+    use_ocr = st.checkbox(
+        "🔍 Use OCR (for scanned PDFs)",
+        value=False,
+        help="Enable OCR for scanned/image-based PDFs. Slower but more accurate for non-text PDFs."
+    )
+    
+    if st.button("🚀 Process Resumes", type="primary", use_container_width=True):
         if uploaded_files:
             process_uploaded_pdfs(uploaded_files, use_ocr)
         else:
-            st.warning("Please upload at least one PDF file.")
+            st.warning("⚠️ Please upload at least one PDF file")
     
     st.divider()
     
-    st.header("🔍 Filters")
+    # Advanced Filters Section
+    st.markdown("### 🔍 Advanced Filters")
     
-    name_filter = st.text_input("Filter by Name", "")
-    skill_filter = st.text_input("Filter by Skill", "")
-    
-    # Ranking option
-    use_ranking = st.checkbox("Rank by relevance", value=False)
-    
-    if st.button("Apply Filters"):
-        filtered = filter_candidates(name_filter, skill_filter)
+    with st.expander("🎯 Filter Options", expanded=False):
+        name_filter = st.text_input(
+            "👤 Filter by Name",
+            value="",
+            placeholder="Enter candidate name...",
+            help="Search candidates by name"
+        )
         
-        # Apply ranking if enabled
-        if use_ranking and filtered:
-            query_text = f"{name_filter} {skill_filter}".strip()
-            if query_text:
-                ranked_results = rank_candidates(filtered, query_text)
-                # Extract just the candidates from ranked tuples
-                st.session_state.filtered_candidates = [candidate for candidate, score in ranked_results]
-                st.success(f"Found and ranked {len(st.session_state.filtered_candidates)} candidate(s)")
-            else:
-                st.session_state.filtered_candidates = filtered
-        else:
-            st.session_state.filtered_candidates = filtered
-            st.success(f"Found {len(filtered)} candidate(s)")
+        skill_filter = st.text_input(
+            "🛠️ Filter by Skill",
+            value="",
+            placeholder="e.g., Python, React, AWS...",
+            help="Search candidates by skill"
+        )
+        
+        # Experience filter
+        exp_filter = st.selectbox(
+            "📊 Experience Level",
+            ["All", "Entry (0-2 yrs)", "Mid (3-5 yrs)", "Senior (6-10 yrs)", "Expert (10+ yrs)"],
+            help="Filter by years of experience"
+        )
+        
+        # Education filter
+        edu_filter = st.selectbox(
+            "🎓 Education Level",
+            ["All", "PhD", "Master's", "Bachelor's", "Associate's", "Diploma"],
+            help="Filter by education level"
+        )
+        
+        use_ranking = st.checkbox(
+            "⭐ Rank by Relevance",
+            value=False,
+            help="Sort results by relevance score"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔎 Apply Filters", use_container_width=True):
+                filtered = filter_candidates(name_filter, skill_filter)
+                
+                # Apply experience filter
+                if exp_filter != "All":
+                    exp_ranges = {
+                        "Entry (0-2 yrs)": (0, 2),
+                        "Mid (3-5 yrs)": (3, 5),
+                        "Senior (6-10 yrs)": (6, 10),
+                        "Expert (10+ yrs)": (11, 100)
+                    }
+                    min_exp, max_exp = exp_ranges[exp_filter]
+                    filtered = [c for c in filtered if min_exp <= c.get("years_experience", 0) <= max_exp]
+                
+                # Apply education filter
+                if edu_filter != "All":
+                    filtered = [c for c in filtered if c.get("education_level", "") == edu_filter]
+                
+                # Apply ranking if enabled
+                if use_ranking and filtered:
+                    query_text = f"{name_filter} {skill_filter}".strip()
+                    if query_text:
+                        ranked_results = rank_candidates(filtered, query_text)
+                        st.session_state.filtered_candidates = [candidate for candidate, score in ranked_results]
+                        st.success(f"✅ Found and ranked {len(st.session_state.filtered_candidates)} candidate(s)")
+                    else:
+                        st.session_state.filtered_candidates = filtered
+                else:
+                    st.session_state.filtered_candidates = filtered
+                    st.success(f"✅ Found {len(filtered)} candidate(s)")
+        
+        with col2:
+            if st.button("🔄 Clear Filters", use_container_width=True):
+                st.session_state.filtered_candidates = []
+                st.rerun()
     
     st.divider()
     
-    st.header("👥 Candidates")
+    # Candidates List Section
+    st.markdown("### 👥 Candidates")
     
     candidates_to_show = st.session_state.get("filtered_candidates", st.session_state.metadata_list)
     
     if candidates_to_show:
-        for idx, candidate in enumerate(candidates_to_show):
-            with st.expander(f"📄 {candidate.get('name', candidate.get('filename', 'Unknown'))}"):
-                st.write(f"**Email:** {candidate.get('email', 'N/A')}")
-                st.write(f"**Phone:** {candidate.get('phone', 'N/A')}")
-                st.write(f"**Skills:** {', '.join(candidate.get('skills', []))}")
-                st.write(f"**File:** {candidate.get('filename', 'N/A')}")
+        st.caption(f"Showing {len(candidates_to_show)} candidate(s)")
+        
+        # Scrollable container for candidates
+        for idx, candidate in enumerate(candidates_to_show[:10]):  # Limit to 10 for performance
+            name = candidate.get('name', candidate.get('filename', 'Unknown'))
+            is_valid_name = name and name != candidate.get('filename', '')
+            
+            with st.expander(f"📄 {name[:30]}{'...' if len(name) > 30 else ''}", expanded=False):
+                # Candidate details
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown(f"**📧 Email:**\n{candidate.get('email', 'N/A')}")
+                    st.markdown(f"**📞 Phone:**\n{candidate.get('phone', 'N/A')}")
+                
+                with col2:
+                    exp_years = candidate.get('years_experience', 0)
+                    st.markdown(f"**📊 Experience:**\n{exp_years} yrs" if exp_years > 0 else "**📊 Experience:**\nN/A")
+                    st.markdown(f"**🎓 Education:**\n{candidate.get('education_level', 'N/A')}")
+                
+                # Skills
+                skills = candidate.get('skills', [])
+                if skills:
+                    st.markdown(f"**🛠️ Skills:** {len(skills)}")
+                    skill_tags = ", ".join(skills[:5])
+                    st.caption(skill_tags + ("..." if len(skills) > 5 else ""))
+                
+                # Additional info
+                if candidate.get('job_titles'):
+                    st.markdown(f"**💼 Title:** {', '.join(candidate.get('job_titles', [])[:2])}")
+                if candidate.get('companies'):
+                    st.markdown(f"**🏢 Company:** {', '.join(candidate.get('companies', [])[:2])}")
+                if candidate.get('location'):
+                    st.markdown(f"**📍 Location:** {candidate.get('location')}")
+                if candidate.get('certifications'):
+                    st.markdown(f"**🏆 Certifications:** {', '.join(candidate.get('certifications', [])[:3])}")
+                
+                st.caption(f"📁 File: {candidate.get('filename', 'N/A')}")
+        
+        if len(candidates_to_show) > 10:
+            st.info(f"💡 Showing first 10 of {len(candidates_to_show)} candidates. Use filters to narrow down.")
     else:
-        st.info("No candidates loaded. Upload resumes to get started.")
+        st.info("📭 No candidates loaded.\n\nUpload resumes to get started!")
     
     st.divider()
     
-    st.header("📤 Export")
+    # Export Section
+    st.markdown("### 📥 Export Data")
     
     candidates_to_export = st.session_state.get("filtered_candidates", st.session_state.metadata_list)
+    
     if candidates_to_export:
-        if st.button("📥 Export to CSV"):
-            try:
-                export_path = "candidates_export.csv"
-                if export_candidates_to_csv(candidates_to_export, export_path):
-                    with open(export_path, 'rb') as f:
-                        st.download_button(
-                            label="Download CSV",
-                            data=f,
-                            file_name="candidates_export.csv",
-                            mime="text/csv"
-                        )
-                    st.success(f"Exported {len(candidates_to_export)} candidates to CSV")
-                else:
-                    st.error("Failed to export candidates")
-            except Exception as e:
-                st.error(f"Export error: {e}")
-                logger.error(f"Export error: {e}")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📊 Export CSV", use_container_width=True):
+                try:
+                    export_path = "candidates_export.csv"
+                    if export_candidates_to_csv(candidates_to_export, export_path):
+                        with open(export_path, 'rb') as f:
+                            st.download_button(
+                                label="⬇️ Download",
+                                data=f,
+                                file_name="candidates_export.csv",
+                                mime="text/csv",
+                                width='stretch'
+                            )
+                        st.success(f"✅ Exported {len(candidates_to_export)} candidates")
+                    else:
+                        st.error("❌ Export failed")
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+        
+        with col2:
+            st.caption(f"📦 {len(candidates_to_export)} candidates ready")
+    else:
+        st.info("📭 No data to export")
     
     st.divider()
     
-    if st.button("🗑️ Clear All Data", type="secondary"):
-        if os.path.exists(VECTOR_STORE_DIR):
-            shutil.rmtree(VECTOR_STORE_DIR)
-        if os.path.exists(METADATA_FILE):
-            os.remove(METADATA_FILE)
-        st.session_state.vector_store = None
-        st.session_state.metadata_list = []
-        st.session_state.chat_history = []
-        st.session_state.documents_processed = False
-        st.session_state.filtered_candidates = []
-        st.rerun()
+    # Data Management Section
+    st.markdown("### 🗑️ Data Management")
+    
+    if st.button("🗑️ Clear All Data", type="secondary", use_container_width=True):
+        if st.session_state.get("confirm_delete", False):
+            try:
+                # Delete vector store
+                if os.path.exists(VECTOR_STORE_DIR):
+                    shutil.rmtree(VECTOR_STORE_DIR)
+                    logger.info("Vector store deleted")
+                
+                # Delete metadata
+                if os.path.exists(METADATA_FILE):
+                    os.remove(METADATA_FILE)
+                    logger.info("Metadata file deleted")
+                
+                # Clear session state
+                st.session_state.vector_store = None
+                st.session_state.metadata_list = []
+                st.session_state.documents_processed = False
+                st.session_state.chat_history = []
+                st.session_state.filtered_candidates = []
+                st.session_state.confirm_delete = False
+                
+                st.success("✅ All data cleared!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+        else:
+            st.session_state.confirm_delete = True
+            st.warning("⚠️ Click again to confirm deletion")
+    
+    # Footer
+    st.divider()
+    st.markdown("""
+    <div style='text-align: center; padding: 1rem 0; color: #666; font-size: 0.8rem;'>
+        <p>📄 Resume RAG System</p>
+        <p>Version 2.0</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Main chat area
 if st.session_state.documents_processed and st.session_state.vector_store:
-    # Add tabs for Chat and Analytics
+    # Add tabs for Chat and Analytics with better styling
     tab1, tab2 = st.tabs(["💬 Chat", "📊 Analytics"])
     
     with tab1:
-        st.header("💬 Chat with Resumes")
+        # Enhanced Chat Header
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown("### 💬 Chat with Resumes")
+            st.caption("Ask questions about the uploaded resumes and get AI-powered answers")
+        with col2:
+            if st.button("🗑️ Clear Chat", use_container_width=True, help="Clear all chat history"):
+                st.session_state.chat_history = []
+                st.rerun()
         
-        # Display chat history
-        for message in st.session_state.chat_history:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
-                if "sources" in message:
-                    with st.expander("📎 Source Documents"):
-                        for source in message["sources"]:
-                            st.write(f"**From:** {source.metadata.get('name', source.metadata.get('filename', 'Unknown'))}")
-                            st.write(f"**Snippet:** {source.page_content[:200]}...")
+        st.divider()
         
-        # Chat input
-        query = st.chat_input("Ask a question about the resumes...")
+        # Chat Container with better styling
+        chat_container = st.container()
+        
+        with chat_container:
+            # Display chat history with enhanced UI
+            if st.session_state.chat_history:
+                for idx, message in enumerate(st.session_state.chat_history):
+                    with st.chat_message(message["role"]):
+                        # Enhanced message display
+                        st.markdown(message["content"])
+                        
+                        # Show source documents in a better format
+                        if "sources" in message and message["sources"]:
+                            with st.expander(f"📎 View Sources ({len(message['sources'])} documents)", expanded=False):
+                                # Group sources by candidate
+                                candidates_sources = {}
+                                for source in message["sources"][:10]:  # Limit to 10
+                                    candidate_name = source.metadata.get('name', source.metadata.get('filename', 'Unknown'))
+                                    if candidate_name not in candidates_sources:
+                                        candidates_sources[candidate_name] = []
+                                    candidates_sources[candidate_name].append(source)
+                                
+                                for candidate_name, sources in candidates_sources.items():
+                                    st.markdown(f"**👤 {candidate_name}**")
+                                    
+                                    # Show candidate metadata
+                                    if sources[0].metadata.get('email'):
+                                        st.caption(f"📧 {sources[0].metadata.get('email')}")
+                                    if sources[0].metadata.get('skills'):
+                                        st.caption(f"🛠️ Skills: {sources[0].metadata.get('skills', 'N/A')[:100]}")
+                                    
+                                    # Show snippets
+                                    for i, source in enumerate(sources[:3], 1):
+                                        st.markdown(f"**Snippet {i}:**")
+                                        st.info(f"{source.page_content[:250]}...")
+                                    
+                                    if len(sources) > 3:
+                                        st.caption(f"... and {len(sources) - 3} more snippets")
+                                    
+                                    st.divider()
+            else:
+                # Welcome message when no chat history
+                st.info("""
+                👋 **Welcome to Resume RAG Chatbot!**
+                
+                **Try asking:**
+                - "Who has experience with Python?"
+                - "Show me candidates with AWS certification"
+                - "Find developers with 5+ years of experience"
+                - "What skills do the candidates have?"
+                
+                Type your question in the chat input below to get started!
+                """)
+        
+        # Enhanced Chat Input
+        st.divider()
+        query = st.chat_input(
+            "💬 Ask a question about the resumes... (e.g., 'Who has Python experience?')",
+            key="chat_input"
+        )
     
         if query:
             # Add user message to chat
             st.session_state.chat_history.append({"role": "user", "content": query})
             with st.chat_message("user"):
-                st.write(query)
+                st.markdown(query)
             
-            # Get response
+            # Get response with enhanced UI
             with st.chat_message("assistant"):
-                with st.spinner("Searching resumes..."):
+                with st.spinner("🔍 Searching resumes and generating response..."):
                     # Retrieve relevant documents (increased k for better diversity)
                     source_docs = query_vector_store(query, k=10)
                     
@@ -649,7 +1916,7 @@ if st.session_state.documents_processed and st.session_state.vector_store:
                         try:
                             answer = generate_response_with_rag(query, llm, source_docs)
                         except Exception as e:
-                            st.error(f"Error: {e}")
+                            st.error(f"❌ Error: {e}")
                             logger.error(f"RAG generation error: {e}")
                             # Fallback to basic retrieval - show all candidates
                             candidates_found = {}
@@ -663,8 +1930,8 @@ if st.session_state.documents_processed and st.session_state.vector_store:
                             for idx, (candidate_name, docs) in enumerate(candidates_found.items(), 1):
                                 answer += f"**{idx}. {candidate_name}**\n"
                                 if docs[0].metadata.get("email"):
-                                    answer += f"Email: {docs[0].metadata.get('email')}\n"
-                                answer += f"Relevant sections:\n"
+                                    answer += f"📧 Email: {docs[0].metadata.get('email')}\n"
+                                answer += f"📄 Relevant sections:\n"
                                 for i, doc in enumerate(docs[:3], 1):
                                     answer += f"  {i}. {doc.page_content[:300]}...\n\n"
                     elif source_docs:
@@ -680,23 +1947,59 @@ if st.session_state.documents_processed and st.session_state.vector_store:
                         for idx, (candidate_name, docs) in enumerate(candidates_found.items(), 1):
                             answer += f"**{idx}. {candidate_name}**\n"
                             if docs[0].metadata.get("email"):
-                                answer += f"Email: {docs[0].metadata.get('email')}\n"
-                            answer += f"Relevant sections:\n"
+                                answer += f"📧 Email: {docs[0].metadata.get('email')}\n"
+                            answer += f"📄 Relevant sections:\n"
                             for i, doc in enumerate(docs[:3], 1):
                                 answer += f"  {i}. {doc.page_content[:300]}...\n\n"
                     else:
-                        answer = "No relevant information found in the resumes."
+                        answer = "❌ No relevant information found in the resumes. Try rephrasing your question."
                     
-                    st.write(answer)
+                    # Display answer with better formatting
+                    st.markdown(answer)
                     
-                    # Show source documents
+                    # Show source documents in enhanced format
                     if source_docs:
-                        with st.expander("📎 Source Documents"):
-                            for doc in source_docs[:5]:
-                                st.markdown(f"**Candidate:** {doc.metadata.get('name', doc.metadata.get('filename', 'Unknown'))}")
-                                st.markdown(f"**Email:** {doc.metadata.get('email', 'N/A')}")
-                                st.markdown(f"**Skills:** {doc.metadata.get('skills', 'N/A')}")
-                                st.markdown(f"**Snippet:** {doc.page_content[:300]}...")
+                        with st.expander(f"📎 Source Documents ({len(source_docs)} found)", expanded=False):
+                            # Group by candidate
+                            candidates_sources = {}
+                            for doc in source_docs[:10]:  # Limit to 10
+                                candidate_name = doc.metadata.get('name', doc.metadata.get('filename', 'Unknown'))
+                                if candidate_name not in candidates_sources:
+                                    candidates_sources[candidate_name] = []
+                                candidates_sources[candidate_name].append(doc)
+                            
+                            for candidate_name, docs in candidates_sources.items():
+                                # Candidate header
+                                st.markdown(f"**👤 {candidate_name}**")
+                                
+                                # Metadata in columns for mobile responsiveness
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if docs[0].metadata.get('email'):
+                                        st.caption(f"📧 {docs[0].metadata.get('email')}")
+                                    if docs[0].metadata.get('phone'):
+                                        st.caption(f"📞 {docs[0].metadata.get('phone')}")
+                                with col2:
+                                    if docs[0].metadata.get('years_experience', 0) > 0:
+                                        st.caption(f"📊 {docs[0].metadata.get('years_experience')} yrs exp")
+                                    if docs[0].metadata.get('education_level'):
+                                        st.caption(f"🎓 {docs[0].metadata.get('education_level')}")
+                                
+                                # Skills
+                                if docs[0].metadata.get('skills'):
+                                    skills_display = docs[0].metadata.get('skills', 'N/A')
+                                    if len(skills_display) > 100:
+                                        skills_display = skills_display[:100] + "..."
+                                    st.caption(f"🛠️ {skills_display}")
+                                
+                                # Show snippets
+                                for i, doc in enumerate(docs[:3], 1):
+                                    st.markdown(f"**📄 Snippet {i}:**")
+                                    st.info(f"{doc.page_content[:300]}...")
+                                
+                                if len(docs) > 3:
+                                    st.caption(f"💡 ... and {len(docs) - 3} more snippets from this candidate")
+                                
                                 st.divider()
                     
                     # Add assistant response to chat history
@@ -705,11 +2008,6 @@ if st.session_state.documents_processed and st.session_state.vector_store:
                         "content": answer,
                         "sources": source_docs
                     })
-        
-        # Clear chat button
-        if st.button("Clear Chat History"):
-            st.session_state.chat_history = []
-            st.rerun()
     
     with tab2:
         show_analytics()
