@@ -227,20 +227,82 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         if filename_clean:
             metadata["name"] = filename_clean
     
-    # Extract skills (common tech keywords)
-    common_skills = [
-        'Python', 'JavaScript', 'Java', 'React', 'Node.js', 'Angular', 'Vue',
-        'SQL', 'MongoDB', 'PostgreSQL', 'AWS', 'Docker', 'Kubernetes',
-        'Git', 'Linux', 'Django', 'Flask', 'Spring', 'TypeScript', 'HTML',
-        'CSS', 'Machine Learning', 'Deep Learning', 'TensorFlow', 'PyTorch',
-        'C++', 'C#', '.NET', 'PHP', 'Ruby', 'Go', 'Rust', 'Swift', 'Kotlin'
+    # Extract skills (common tech keywords) - improved with word boundaries
+    # Skills list with proper patterns for accurate matching
+    skill_patterns = {
+        'Python': [r'\bPython\b', r'\bPythonic\b'],
+        'JavaScript': [r'\bJavaScript\b', r'\bJS\b', r'\bjs\b'],
+        'Java': [r'\bJava\b'],  # Note: might match "JavaScript", so check JavaScript first
+        'React': [r'\bReact\b', r'\bReact\.js\b'],
+        'Node.js': [r'\bNode\.js\b', r'\bNodeJS\b', r'\bnodejs\b'],
+        'Angular': [r'\bAngular\b', r'\bAngularJS\b'],
+        'Vue': [r'\bVue\.js\b', r'\bVue\b'],
+        'SQL': [r'\bSQL\b'],  # Check SQL separately, full DB names checked below
+        'MongoDB': [r'\bMongoDB\b', r'\bMongo\b'],
+        'PostgreSQL': [r'\bPostgreSQL\b', r'\bPostgres\b'],
+        'MySQL': [r'\bMySQL\b'],
+        'AWS': [r'\bAWS\b'],  # Check AWS separately, full name checked below
+        'Docker': [r'\bDocker\b'],
+        'Kubernetes': [r'\bKubernetes\b', r'\bK8s\b'],
+        'Git': [r'\bGit\b', r'\bGitHub\b', r'\bGitLab\b'],  # Git might match GitHub/GitLab
+        'Linux': [r'\bLinux\b'],
+        'Django': [r'\bDjango\b'],
+        'Flask': [r'\bFlask\b'],
+        'Spring': [r'\bSpring\b', r'\bSpring Boot\b', r'\bSpring Framework\b'],
+        'TypeScript': [r'\bTypeScript\b', r'\bTS\b'],
+        'HTML': [r'\bHTML\b', r'\bHTML5\b'],
+        'CSS': [r'\bCSS\b', r'\bCSS3\b'],
+        'Machine Learning': [r'\bMachine Learning\b', r'\bML\b'],
+        'Deep Learning': [r'\bDeep Learning\b', r'\bDL\b'],
+        'TensorFlow': [r'\bTensorFlow\b'],
+        'PyTorch': [r'\bPyTorch\b'],
+        'C++': [r'\bC\+\+\b', r'\bCPP\b'],
+        'C#': [r'\bC#\b', r'\bCSharp\b'],
+        '.NET': [r'\b\.NET\b', r'\bDotNet\b', r'\bdotnet\b'],
+        'PHP': [r'\bPHP\b'],
+        'Ruby': [r'\bRuby\b', r'\bRuby on Rails\b'],
+        'Go': [r'\bGo\b', r'\bGolang\b'],
+        'Rust': [r'\bRust\b'],
+        'Swift': [r'\bSwift\b'],
+        'Kotlin': [r'\bKotlin\b']
+    }
+    
+    # Add Amazon Web Services as a separate skill if needed
+    skill_patterns['Amazon Web Services'] = [r'\bAmazon\s+Web\s+Services\b']
+    
+    # Skills that should be checked in order (longer names first to avoid partial matches)
+    skill_order = [
+        'Machine Learning', 'Deep Learning', 'Node.js', 'Angular', 'TypeScript',
+        'PostgreSQL', 'MySQL', 'JavaScript', 'Kubernetes', 'TensorFlow',
+        'Amazon Web Services', 'Spring Boot', 'Spring Framework', 'Ruby on Rails',
+        'Vue.js', 'React.js', 'C++', 'C#', '.NET', 'CSS3', 'HTML5',
+        'Python', 'React', 'Vue', 'Java', 'SQL', 'MongoDB', 'AWS', 'Docker',
+        'GitHub', 'GitLab', 'Git', 'Linux', 'Django', 'Flask', 'Spring',
+        'PyTorch', 'PHP', 'Ruby', 'Go', 'Rust', 'Swift', 'Kotlin',
+        'HTML', 'CSS'
     ]
     
-    text_upper = text.upper()
     found_skills = []
-    for skill in common_skills:
-        if skill.upper() in text_upper:
-            found_skills.append(skill)
+    text_lower = text.lower()
+    
+    # Track which parts of text have been matched to avoid double-counting
+    matched_positions = set()
+    
+    # Check skills in order (longer/more specific first)
+    for skill in skill_order:
+        if skill in skill_patterns:
+            patterns = skill_patterns[skill]
+            for pattern in patterns:
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                for match in matches:
+                    # Check if this position overlaps with a previous match
+                    match_range = set(range(match.start(), match.end()))
+                    if not matched_positions.intersection(match_range):
+                        found_skills.append(skill)
+                        matched_positions.update(match_range)
+                        break  # Only add skill once even if multiple patterns match
+                if skill in found_skills:
+                    break
     
     metadata["skills"] = found_skills[:10]  # Limit to 10 skills
     
@@ -342,26 +404,174 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         total_years = sum(years_found)
         metadata["years_experience"] = min(total_years, 50)  # Cap at 50 years
     
-    # Extract education level
+    # Extract education level - improved with context checking
+    # Education context keywords to ensure we're matching actual degrees
+    education_context_keywords = [
+        "degree", "education", "university", "college", "school", 
+        "institute", "graduated", "graduation", "bachelor", "master",
+        "phd", "doctorate", "diploma", "certification"
+    ]
+    
+    # Check if text contains education-related context
+    text_lower = text.lower()
+    has_education_context = any(ctx in text_lower for ctx in education_context_keywords)
+    
+    # Education keywords - more specific patterns to avoid false positives
     education_keywords = {
-        "PhD": ["phd", "ph.d", "doctorate", "doctoral"],
-        "Master's": ["master", "ms ", "m.s", "mba", "m.sc", "meng"],
-        "Bachelor's": ["bachelor", "bs ", "b.s", "ba ", "b.a", "bsc", "b.sc", "beng", "b.eng"],
-        "Associate's": ["associate", "aa ", "a.a", "as ", "a.s"],
-        "Diploma": ["diploma", "certificate"]
+        "PhD": [
+            r'\bph\.?\s*d\.?\b',  # Ph.D or PhD
+            r'\bdoctorate\b',
+            r'\bdoctoral\s+degree\b',
+            r'\bdoctor\s+of\s+philosophy\b'
+        ],
+        "Master's": [
+            r'\bmaster\'?s?\s+degree\b',  # Master's degree or Masters degree
+            r'\bm\.?\s*s\.?\b',  # M.S or MS
+            r'\bm\.?\s*sc\.?\b',  # M.Sc
+            r'\bm\.?\s*eng\.?\b',  # M.Eng
+            r'\bmba\b',  # MBA
+            r'\bma\b',  # MA (Master of Arts)
+            r'\bmsc\b',  # MSc
+            r'\bmeng\b'  # MEng
+        ],
+        "Bachelor's": [
+            r'\bbachelor\'?s?\s+degree\b',  # Bachelor's degree or Bachelors degree
+            r'\bb\.?\s*s\.?\b',  # B.S or BS
+            r'\bb\.?\s*a\.?\b',  # B.A or BA
+            r'\bb\.?\s*sc\.?\b',  # B.Sc
+            r'\bb\.?\s*eng\.?\b',  # B.Eng
+            r'\bbsc\b',  # BSc
+            r'\bbeng\b',  # BEng
+            r'\bbtech\b'  # BTech
+        ],
+        "Associate's": [
+            r'\bassociate\'?s?\s+degree\b',
+            r'\ba\.?\s*a\.?\b',  # A.A
+            r'\ba\.?\s*s\.?\b',  # A.S
+            r'\baas\b'  # AAS
+        ],
+        "Diploma": [
+            r'\bdiploma\s+in\b',
+            r'\bdiploma\s+from\b',
+            r'\beducational\s+certificate\b',
+            r'\bdegree\s+certificate\b'
+        ]
     }
     
-    text_lower = text.lower()
-    for level, keywords in education_keywords.items():
-        if any(keyword in text_lower for keyword in keywords):
-            metadata["education_level"] = level
-            break
+    # Find all education levels mentioned (prioritize highest degree)
+    # More strict: abbreviations need education context nearby
+    found_levels = []
+    degree_order = ["PhD", "Master's", "Bachelor's", "Associate's", "Diploma"]
     
-    # Extract job titles (common patterns)
+    # Patterns that require strict education context (abbreviations that can be ambiguous)
+    strict_patterns = {
+        "Master's": [r'\bm\.?\s*s\.?\b', r'\bm\.?\s*sc\.?\b', r'\bm\.?\s*eng\.?\b', r'\bma\b', r'\bmsc\b', r'\bmeng\b'],
+        "Bachelor's": [r'\bb\.?\s*s\.?\b', r'\bb\.?\s*a\.?\b', r'\bb\.?\s*sc\.?\b', r'\bb\.?\s*eng\.?\b', r'\bbsc\b', r'\bbeng\b', r'\bbtech\b'],
+        "Associate's": [r'\ba\.?\s*a\.?\b', r'\ba\.?\s*s\.?\b', r'\baas\b']
+    }
+    
+    # Non-ambiguous patterns (full words that are clearly education-related)
+    clear_patterns = {
+        "PhD": [r'\bph\.?\s*d\.?\b', r'\bdoctorate\b', r'\bdoctoral\s+degree\b', r'\bdoctor\s+of\s+philosophy\b'],
+        "Master's": [r'\bmaster\'?s?\s+degree\b', r'\bmba\b'],
+        "Bachelor's": [r'\bbachelor\'?s?\s+degree\b'],
+        "Associate's": [r'\bassociate\'?s?\s+degree\b'],
+        "Diploma": [r'\bdiploma\s+in\b', r'\bdiploma\s+from\b', r'\beducational\s+certificate\b', r'\bdegree\s+certificate\b']
+    }
+    
+    for level in degree_order:
+        level_found = False
+        
+        # First check clear patterns (full words/obvious abbreviations like MBA)
+        if level in clear_patterns:
+            for pattern in clear_patterns[level]:
+                if re.search(pattern, text, re.IGNORECASE):
+                    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                    for match in matches:
+                        # For clear patterns, check broader context
+                        start = max(0, match.start() - 150)
+                        end = min(len(text), match.end() + 150)
+                        context = text[start:end].lower()
+                        
+                        # Check if it's NOT in a clear non-education context
+                        non_education_contexts = [
+                            'microsoft', 'ms office', 'ms windows', 'ms excel', 'ms word',
+                            'master of ceremonies', 'masters tournament', 'master craftsman',
+                            'master class', 'master plan', 'master control'
+                        ]
+                        
+                        is_non_education = any(non_ed in context for non_ed in non_education_contexts)
+                        
+                        if not is_non_education and (has_education_context or any(ctx in context for ctx in education_context_keywords)):
+                            found_levels.append(level)
+                            level_found = True
+                            break
+                    if level_found:
+                        break
+        
+        # Then check strict patterns (abbreviations that need education context)
+        if not level_found and level in strict_patterns:
+            for pattern in strict_patterns[level]:
+                if re.search(pattern, text, re.IGNORECASE):
+                    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                    for match in matches:
+                        # For strict patterns, require education context within 50 chars
+                        start = max(0, match.start() - 50)
+                        end = min(len(text), match.end() + 50)
+                        context = text[start:end].lower()
+                        
+                        # Require education context nearby for abbreviations
+                        # Also exclude common false positives
+                        non_education_contexts = [
+                            'microsoft', 'ms office', 'ms windows', 'ms excel', 'ms word', 'ms teams',
+                            'massachusetts', 'ma ',  # State abbreviation
+                            'master of ceremonies', 'masters tournament',
+                            'email', '@', 'gmail', 'yahoo',  # Email context
+                            'company', 'corporation', 'inc', 'llc',  # Company context
+                            'project manager', 'product manager', 'program manager'  # Job title context
+                        ]
+                        
+                        # Check if it's in a non-education context
+                        is_non_education = any(non_ed in context for non_ed in non_education_contexts)
+                        
+                        # Must have education context AND not be in non-education context
+                        has_ed_context = any(ctx in context for ctx in education_context_keywords)
+                        
+                        if has_ed_context and not is_non_education:
+                            found_levels.append(level)
+                            level_found = True
+                            break
+                    if level_found:
+                        break
+        
+        if level_found:
+            break  # Stop after finding highest level
+    
+    # Set to highest degree found, or empty if none found
+    if found_levels:
+        # Get the first (highest) level found
+        metadata["education_level"] = found_levels[0]
+    else:
+        # If no specific degree found, leave empty (will be shown as "Not Specified" in UI)
+        metadata["education_level"] = ""
+    
+    # Extract job titles (common patterns) - improved with context validation
     job_title_patterns = [
         r'(Senior|Junior|Lead|Principal|Staff|Associate)?\s*(Software|Data|ML|AI|DevOps|Cloud|Full.?Stack|Front.?end|Back.?end|Mobile|QA|Test|Security|Network|System|Database|Business|Product|Project|Marketing|Sales|HR|Finance|Operations|Research|Design|UX|UI)\s+(Engineer|Developer|Architect|Analyst|Scientist|Manager|Specialist|Consultant|Designer|Director|Lead|Coordinator|Associate|Executive|Officer|Administrator|Technician)',
         r'(Software|Data|ML|AI|DevOps|Cloud|Full.?Stack|Front.?end|Back.?end|Mobile|QA|Test|Security|Network|System|Database|Business|Product|Project|Marketing|Sales|HR|Finance|Operations|Research|Design|UX|UI)\s+(Engineer|Developer|Architect|Analyst|Scientist|Manager|Specialist|Consultant|Designer|Director|Lead|Coordinator|Associate|Executive|Officer|Administrator|Technician)',
         r'(Programmer|Developer|Engineer|Analyst|Manager|Director|Consultant|Specialist|Designer|Architect|Scientist)',
+    ]
+    
+    # Context keywords that suggest this is a job title (not other usage)
+    job_context_keywords = [
+        'position', 'role', 'title', 'worked as', 'served as', 'employed as',
+        'experience', 'employment', 'career', 'responsibilities', 'at', 'company'
+    ]
+    
+    # Patterns to exclude (common false positives)
+    exclude_patterns = [
+        r'project manager', r'program manager', r'product manager',  # Often matched incorrectly
+        r'\bmanager\b.*\bmanager\b',  # Manager manager
     ]
     
     titles_found = []
@@ -369,14 +579,45 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         matches = re.finditer(pattern, text, re.IGNORECASE)
         for match in matches:
             title = match.group(0).strip()
-            if len(title) > 3 and len(title) < 50:  # Reasonable title length
+            
+            # Basic validation
+            if len(title) < 3 or len(title) > 50:
+                continue
+            
+            # Check if it's in a valid job title context
+            match_start = match.start()
+            match_end = match.end()
+            context_start = max(0, match_start - 100)
+            context_end = min(len(text), match_end + 100)
+            context = text[context_start:context_end].lower()
+            
+            # Skip if it's a false positive pattern
+            if any(re.search(exclude_pattern, title, re.IGNORECASE) for exclude_pattern in exclude_patterns):
+                continue
+            
+            # Prefer matches that are near job context keywords
+            has_job_context = any(keyword in context for keyword in job_context_keywords)
+            
+            # Also check the line containing the match
+            line_num = text[:match_start].count('\n')
+            lines = text.split('\n')
+            if line_num < len(lines):
+                line_text = lines[line_num].lower()
+                if any(keyword in line_text for keyword in job_context_keywords):
+                    has_job_context = True
+            
+            # Include if it has job context OR if it's in a section that likely contains titles
+            if has_job_context or any(keyword in context for keyword in ['experience', 'employment', 'work']):
                 titles_found.append(title)
     
     # Remove duplicates and limit
     seen = set()
     unique_titles = []
     for title in titles_found:
-        title_lower = title.lower()
+        title_lower = title.lower().strip()
+        # Skip if it's too generic or looks invalid
+        if title_lower in ['manager', 'director', 'engineer', 'developer', 'analyst']:
+            continue  # Too generic, need more context
         if title_lower not in seen:
             seen.add(title_lower)
             unique_titles.append(title)
@@ -386,10 +627,23 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     metadata["job_titles"] = unique_titles
     
     # Extract company names (look for capitalized words after job titles or in experience section)
-    # This is a simplified extraction - in production, you'd use NER
+    # Improved with better context validation
     company_patterns = [
         r'at\s+([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries)?)',
         r'([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries))',
+    ]
+    
+    # Words to exclude (common false positives)
+    exclude_company_words = [
+        'the', 'and', 'at', 'of', 'in', 'on', 'with', 'for', 'from', 'to',
+        'resume', 'cv', 'curriculum', 'vitae', 'experience', 'education',
+        'skills', 'projects', 'references', 'contact', 'email', 'phone'
+    ]
+    
+    # Context keywords that suggest this is a company
+    company_context_keywords = [
+        'at', 'company', 'employer', 'organization', 'corporation', 'firm',
+        'experience', 'employment', 'worked', 'employed'
     ]
     
     companies_found = []
@@ -397,19 +651,55 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         matches = re.finditer(pattern, text)
         for match in matches:
             company = match.group(1).strip() if match.groups() else match.group(0).strip()
-            if len(company) > 2 and len(company) < 50:
-                companies_found.append(company)
+            
+            # Basic validation
+            if len(company) < 3 or len(company) > 50:
+                continue
+            
+            # Check if it's in a valid company context
+            match_start = match.start()
+            match_end = match.end()
+            context_start = max(0, match_start - 80)
+            context_end = min(len(text), match_end + 80)
+            context = text[context_start:context_end].lower()
+            
+            # Skip if it's in excluded words or common false positives
+            company_words = company.split()
+            if any(word.lower() in exclude_company_words for word in company_words):
+                continue
+            
+            # Prefer matches near company context keywords
+            has_company_context = any(keyword in context for keyword in company_context_keywords)
+            
+            # Also check the line containing the match
+            line_num = text[:match_start].count('\n')
+            lines = text.split('\n')
+            if line_num < len(lines):
+                line_text = lines[line_num].lower()
+                if any(keyword in line_text for keyword in company_context_keywords):
+                    has_company_context = True
+            
+            # Include if it has company context OR appears in experience section
+            if has_company_context or any(keyword in context for keyword in ['experience', 'employment', 'work']):
+                # Additional check: company should start with capital and have reasonable structure
+                if company[0].isupper() and not company.lower().startswith(tuple(exclude_company_words)):
+                    companies_found.append(company)
     
-    # Remove duplicates
+    # Remove duplicates and filter out invalid entries
     seen = set()
     unique_companies = []
     for company in companies_found:
-        company_lower = company.lower()
-        if company_lower not in seen and company_lower not in ['the', 'and', 'at', 'of']:
-            seen.add(company_lower)
-            unique_companies.append(company)
-            if len(unique_companies) >= 5:
-                break
+        company_lower = company.lower().strip()
+        # Skip if it's too generic or already seen
+        if company_lower in seen or company_lower in exclude_company_words:
+            continue
+        # Skip single words that are too common
+        if len(company.split()) == 1 and company_lower in ['company', 'inc', 'llc', 'corp']:
+            continue
+        seen.add(company_lower)
+        unique_companies.append(company)
+        if len(unique_companies) >= 5:
+            break
     
     metadata["companies"] = unique_companies
     
@@ -425,21 +715,208 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
             metadata["location"] = match.group(0).strip()
             break
     
-    # Extract certifications
-    cert_keywords = [
-        "AWS Certified", "Azure", "GCP", "Google Cloud",
-        "PMP", "Scrum Master", "Agile", "ITIL",
-        "CISSP", "Security+", "CEH", "CISM",
-        "Oracle Certified", "Microsoft Certified", "Cisco",
-        "Kubernetes", "Docker", "Terraform"
-    ]
+    # Extract certifications - improved with comprehensive patterns and generic detection
+    cert_patterns = {
+        # AWS certifications - expanded patterns
+        "AWS Certified": [
+            r'\bAWS\s+Certified\b', r'\bAmazon\s+Web\s+Services\s+Certified\b',
+            r'\bAWS\s+Solutions\s+Architect\b', r'\bAWS\s+Developer\b', r'\bAWS\s+SysOps\b',
+            r'\bAWS\s+SA\b', r'\bAWS\s+CLF\b', r'\bAWS\s+SAA\b', r'\bAWS\s+DVA\b', r'\bAWS\s+SOA\b'
+        ],
+        # Azure certifications - expanded patterns
+        "Azure Certified": [
+            r'\bAzure\s+Certified\b', r'\bMicrosoft\s+Azure\b', r'\bAzure\s+AZ-\d+\b',
+            r'\bAZ-900\b', r'\bAZ-104\b', r'\bAZ-305\b', r'\bAZ-204\b', r'\bAZ-400\b',
+            r'\bAzure\s+Fundamentals\b', r'\bAzure\s+Administrator\b', r'\bAzure\s+Architect\b',
+            r'\bAzure\s+Developer\b', r'\bAzure\s+DevOps\b'
+        ],
+        # Google certifications - comprehensive
+        "Google Cloud Certified": [
+            r'\bGCP\s+Certified\b', r'\bGoogle\s+Cloud\s+Certified\b',
+            r'\bGCP\s+Architect\b', r'\bGCP\s+Developer\b', r'\bGCP\s+Data\s+Engineer\b',
+            r'\bGoogle\s+Cloud\s+Professional\b', r'\bGoogle\s+Cloud\s+Associate\b',
+            r'\bGCP\s+Professional\b', r'\bProfessional\s+Cloud\s+Architect\b',
+            r'\bProfessional\s+Cloud\s+Developer\b', r'\bProfessional\s+Data\s+Engineer\b'
+        ],
+        "Google Analytics": [r'\bGoogle\s+Analytics\s+Certified\b', r'\bGA\s+Certified\b', r'\bGAIQ\b'],
+        "Google Ads": [r'\bGoogle\s+Ads\s+Certified\b', r'\bGoogle\s+AdWords\s+Certified\b'],
+        "Google IT Support": [r'\bGoogle\s+IT\s+Support\b', r'\bGoogle\s+IT\s+Certificate\b'],
+        "Google Data Analytics": [r'\bGoogle\s+Data\s+Analytics\b'],
+        "Google UX Design": [r'\bGoogle\s+UX\s+Design\b'],
+        "Google Project Management": [r'\bGoogle\s+Project\s+Management\b'],
+        "Google Cybersecurity": [r'\bGoogle\s+Cybersecurity\b'],
+        # Project Management
+        "PMP": [r'\bPMP\b', r'\bProject\s+Management\s+Professional\b'],
+        "PRINCE2": [r'\bPRINCE2\b'],
+        "CAPM": [r'\bCAPM\b'],
+        # Agile/Scrum
+        "Scrum Master": [r'\bScrum\s+Master\b', r'\bCSM\b', r'\bCertified\s+Scrum\s+Master\b'],
+        "Scrum Product Owner": [r'\bCSPO\b', r'\bCertified\s+Scrum\s+Product\s+Owner\b'],
+        "SAFe": [r'\bSAFe\b', r'\bScaled\s+Agile\b'],
+        "Agile": [r'\bAgile\s+Certified\b', r'\bPMI-ACP\b'],
+        # ITIL
+        "ITIL": [r'\bITIL\b', r'\bITIL\s+Foundation\b', r'\bITIL\s+v4\b'],
+        # Security certifications
+        "CISSP": [r'\bCISSP\b', r'\bCertified\s+Information\s+Systems\s+Security\s+Professional\b'],
+        "Security+": [r'\bSecurity\+\b', r'\bSecurity Plus\b', r'\bCompTIA\s+Security\+\b'],
+        "CEH": [r'\bCEH\b', r'\bCertified\s+Ethical\s+Hacker\b'],
+        "CISM": [r'\bCISM\b', r'\bCertified\s+Information\s+Security\s+Manager\b'],
+        "CISA": [r'\bCISA\b', r'\bCertified\s+Information\s+Systems\s+Auditor\b'],
+        # Vendor certifications
+        "Oracle Certified": [r'\bOracle\s+Certified\b', r'\bOCA\b', r'\bOCP\b', r'\bOCE\b'],
+        "Microsoft Certified": [
+            r'\bMicrosoft\s+Certified\b', r'\bMCSA\b', r'\bMCSE\b', r'\bMCSD\b',
+            r'\bMicrosoft\s+Azure\b', r'\bMS-\d+\b'
+        ],
+        "Cisco Certified": [
+            r'\bCisco\s+Certified\b', r'\bCCNA\b', r'\bCCNP\b', r'\bCCIE\b',
+            r'\bCisco\s+CCNA\b', r'\bCisco\s+CCNP\b'
+        ],
+        # Cloud/DevOps
+        "Kubernetes Certified": [r'\bCKA\b', r'\bCKAD\b', r'\bKubernetes\s+Certified\b'],
+        "Docker Certified": [r'\bDocker\s+Certified\b'],
+        "Terraform Certified": [r'\bTerraform\s+Certified\b', r'\bHashicorp\s+Terraform\b'],
+        # Salesforce
+        "Salesforce Certified": [
+            r'\bSalesforce\s+Certified\b', r'\bSalesforce\s+Admin\b',
+            r'\bSalesforce\s+Developer\b', r'\bSFDC\b'
+        ],
+        # Red Hat
+        "Red Hat Certified": [r'\bRHCE\b', r'\bRHCSA\b', r'\bRed\s+Hat\b'],
+        # CompTIA
+        "CompTIA A+": [r'\bCompTIA\s+A\+\b', r'\bA\+\b'],
+        "CompTIA Network+": [r'\bCompTIA\s+Network\+\b', r'\bNetwork\+\b'],
+        "CompTIA Security+": [r'\bCompTIA\s+Security\+\b'],
+        # IBM certifications - comprehensive
+        "IBM Certified": [
+            r'\bIBM\s+Certified\b', r'\bIBM\s+Professional\b',
+            r'\bIBM\s+Specialist\b', r'\bIBM\s+Associate\b'
+        ],
+        "IBM Cloud": [
+            r'\bIBM\s+Cloud\s+Certified\b', r'\bIBM\s+Cloud\s+Professional\b',
+            r'\bIBM\s+Cloud\s+Solutions\s+Architect\b'
+        ],
+        "IBM Data Science": [
+            r'\bIBM\s+Data\s+Science\s+Certified\b', r'\bIBM\s+Data\s+Science\s+Professional\b',
+            r'\bIBM\s+Data\s+Analyst\b', r'\bIBM\s+Data\s+Engineer\b'
+        ],
+        "IBM AI Engineering": [
+            r'\bIBM\s+AI\s+Engineering\b', r'\bIBM\s+Machine\s+Learning\b',
+            r'\bIBM\s+Artificial\s+Intelligence\b'
+        ],
+        "IBM Watson": [r'\bIBM\s+Watson\s+Certified\b', r'\bWatson\s+Certified\b'],
+        "IBM Power Systems": [r'\bIBM\s+Power\s+Systems\b'],
+        "IBM DB2": [r'\bIBM\s+DB2\b', r'\bDB2\s+Certified\b'],
+        "IBM Cognos": [r'\bIBM\s+Cognos\b', r'\bCognos\s+Certified\b'],
+        "IBM Rational": [r'\bIBM\s+Rational\b'],
+        # Data/ML
+        "Tableau Certified": [r'\bTableau\s+Certified\b'],
+        "Snowflake Certified": [r'\bSnowflake\s+Certified\b'],
+        # Other common certifications
+        "TOGAF": [r'\bTOGAF\b'],
+        "COBIT": [r'\bCOBIT\b']
+    }
     
     certs_found = []
-    for cert in cert_keywords:
-        if cert.lower() in text_lower:
-            certs_found.append(cert)
+    seen_certs = set()
     
-    metadata["certifications"] = certs_found[:5]  # Limit to 5
+    # First, check for specific certification patterns
+    for cert_name, patterns in cert_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                for match in matches:
+                    context_start = max(0, match.start() - 80)
+                    context_end = min(len(text), match.end() + 80)
+                    context = text[context_start:context_end].lower()
+                    
+                    # Check if it's in a certifications section
+                    line_num = text[:match.start()].count('\n')
+                    lines = text.split('\n')
+                    
+                    # Check nearby lines for certification context
+                    has_cert_context = False
+                    for i in range(max(0, line_num - 3), min(len(lines), line_num + 3)):
+                        line_lower = lines[i].lower()
+                        if any(keyword in line_lower for keyword in [
+                            'certification', 'certified', 'certificate', 'credential',
+                            'license', 'cert', 'qualification'
+                        ]):
+                            has_cert_context = True
+                            break
+                    
+                    # More lenient: include if in cert context OR if it's a known cert abbreviation
+                    is_known_abbreviation = any(abbr in pattern for abbr in [
+                        'PMP', 'CISSP', 'CEH', 'CISM', 'ITIL', 'CCNA', 'CCNP', 
+                        'AZ-', 'AWS', 'CSM', 'CKA', 'CKAD', 'IBM', 'GCP', 'GA',
+                        'Google'
+                    ])
+                    
+                    # Skip only if clearly NOT about certification (skill mention)
+                    if not has_cert_context and not is_known_abbreviation:
+                        if any(word in context for word in [
+                            'experience with', 'proficient in', 'expert in',
+                            'skill in', 'knowledge of'
+                        ]):
+                            continue  # Likely a skill mention, not certification
+                    
+                    cert_lower = cert_name.lower()
+                    if cert_lower not in seen_certs:
+                        certs_found.append(cert_name)
+                        seen_certs.add(cert_lower)
+                    break
+                if cert_name in certs_found:
+                    break
+    
+    # Second, try to find generic certificates in a "Certifications" section
+    # Look for lines that might contain certifications
+    cert_keywords = ['certification', 'certificate', 'certified', 'credential', 'license']
+    lines = text.split('\n')
+    in_cert_section = False
+    
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+        
+        # Check if we're entering a certifications section
+        if any(keyword in line_lower for keyword in cert_keywords):
+            in_cert_section = True
+            continue
+        
+        # If we're in a cert section, look for certificate-like patterns
+        if in_cert_section and len(line.strip()) > 3:
+            # Look for patterns like "Name - Issuer" or "Name (Issuer)"
+            # Or just capitalized words that might be certifications
+            cert_line_pattern = r'\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*(?:\s+\+)?)\b'
+            potential_certs = re.findall(cert_line_pattern, line)
+            
+            for potential_cert in potential_certs:
+                cert_clean = potential_cert.strip()
+                # Skip common false positives
+                if cert_clean.lower() in [
+                    'certification', 'certified', 'certificate', 'credentials',
+                    'experience', 'education', 'skills', 'projects', 'summary',
+                    'resume', 'cv', 'name', 'address', 'phone', 'email'
+                ]:
+                    continue
+                
+                # Skip if it's too short or too long
+                if len(cert_clean) < 3 or len(cert_clean) > 50:
+                    continue
+                
+                # Check if it looks like a certification (has numbers, hyphens, or known cert keywords)
+                if re.search(r'[A-Z]{2,}-?\d+|[A-Z]+\+', cert_clean) or any(keyword in cert_clean.lower() for keyword in [
+                    'certified', 'professional', 'specialist', 'expert', 'foundation'
+                ]):
+                    cert_lower = cert_clean.lower()
+                    if cert_lower not in seen_certs and len(certs_found) < 10:
+                        certs_found.append(cert_clean)
+                        seen_certs.add(cert_lower)
+        
+        # Reset if we hit another section
+        if in_cert_section and line_lower in ['experience', 'education', 'skills', 'projects', 'summary']:
+            in_cert_section = False
+    
+    metadata["certifications"] = certs_found[:10]  # Increased limit to 10
     
     return metadata
 

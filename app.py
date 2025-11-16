@@ -753,30 +753,79 @@ def show_analytics():
     st.markdown("### 🎓 Education Level Breakdown")
     education_data = {}
     for candidate in st.session_state.metadata_list:
-        edu = candidate.get("education_level", "Not Specified")
+        edu = candidate.get("education_level", "")
+        # Normalize empty strings and handle "Not Specified"
+        if not edu or edu.strip() == "":
+            edu = "Not Specified"
         education_data[edu] = education_data.get(edu, 0) + 1
     
     if education_data:
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            edu_df = pd.DataFrame(list(education_data.items()), columns=["Education Level", "Count"])
+            # Sort education levels by standard order, then by count
+            education_order = ["PhD", "Master's", "Bachelor's", "Associate's", "Diploma", "Not Specified"]
+            sorted_data = sorted(
+                education_data.items(),
+                key=lambda x: (education_order.index(x[0]) if x[0] in education_order else 999, -x[1])
+            )
+            
+            edu_df = pd.DataFrame(sorted_data, columns=["Education Level", "Count"])
+            
+            # Use colors that work well with dark theme
+            colors = px.colors.qualitative.Set3[:len(education_data)]
+            
             fig = px.pie(
                 edu_df,
                 values="Count",
                 names="Education Level",
                 title="Education Distribution",
-                hole=0.4
+                hole=0.4,
+                color_discrete_sequence=colors
             )
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            fig.update_layout(height=400, autosize=True)
+            fig.update_traces(
+                textposition='inside', 
+                textinfo='percent+label',
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+            )
+            fig.update_layout(
+                height=400, 
+                autosize=True,
+                font=dict(color='#fafafa'),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                title_font=dict(color='#4fc3f7', size=16)
+            )
             st.plotly_chart(fig, width='stretch', config={'displayModeBar': True, 'responsive': True})
         
         with col2:
             st.markdown("#### 📚 Education Details")
-            for edu_level, count in sorted(education_data.items(), key=lambda x: x[1], reverse=True):
-                percentage = (count / total_count * 100)
-                st.markdown(f"**{edu_level}**: {count} candidates ({percentage:.1f}%)")
+            
+            # Show sorted list with better formatting
+            total_with_education = sum(count for level, count in education_data.items() if level != "Not Specified")
+            total_without_education = education_data.get("Not Specified", 0)
+            
+            # Show education levels first (in order)
+            for edu_level, count in sorted_data:
+                if edu_level != "Not Specified":
+                    percentage = (count / total_count * 100)
+                    st.markdown(f"**{edu_level}**: {count} candidate{'s' if count != 1 else ''} ({percentage:.1f}%)")
+            
+            # Show "Not Specified" separately if present
+            if total_without_education > 0:
+                percentage = (total_without_education / total_count * 100)
+                st.markdown("---")
+                st.markdown(f"**Not Specified**: {total_without_education} candidate{'s' if total_without_education != 1 else ''} ({percentage:.1f}%)")
+                st.caption("💡 Education level could not be detected from resume text")
+            
+            # Summary
+            if total_with_education > 0:
+                st.markdown("---")
+                coverage_pct = (total_with_education / total_count * 100)
+                st.markdown(f"**📊 Coverage**: {total_with_education}/{total_count} candidates ({coverage_pct:.1f}%)")
+    
+    else:
+        st.info("📋 No education data available")
     
     st.divider()
     
@@ -788,11 +837,12 @@ def show_analytics():
         all_titles.extend(titles)
     
     if all_titles:
+        # Count full titles, not just first word
         title_counts = {}
         for title in all_titles:
-            # Normalize title (take first part if too long)
-            title_normalized = title.split()[0] if len(title.split()) > 0 else title
-            title_counts[title_normalized] = title_counts.get(title_normalized, 0) + 1
+            title_normalized = title.strip()
+            if len(title_normalized) > 0:
+                title_counts[title_normalized] = title_counts.get(title_normalized, 0) + 1
         
         top_titles = sorted(title_counts.items(), key=lambda x: x[1], reverse=True)[:15]
         
@@ -821,7 +871,11 @@ def show_analytics():
         with col2:
             st.markdown("#### 💼 Top Titles")
             for idx, (title, count) in enumerate(top_titles[:10], 1):
-                st.markdown(f"**{idx}. {title}** - {count}")
+                percentage = (count / total_count * 100)
+                st.markdown(f"**{idx}. {title}**")
+                st.markdown(f"   - {count} candidate{'s' if count != 1 else ''} ({percentage:.1f}%)")
+    else:
+        st.info("📋 **No job titles found**\n\nNo job titles were detected in the uploaded resumes. Titles are extracted from experience sections.")
     
     st.divider()
     
@@ -861,6 +915,8 @@ def show_analytics():
                 percentage = (count / total_count * 100)
                 st.markdown(f"**{idx}. {company}**")
                 st.markdown(f"   - {count} candidate(s) ({percentage:.1f}%)")
+    else:
+        st.info("📋 **No companies found**\n\nNo company names were detected in the uploaded resumes. Companies are extracted from experience sections.")
     
     st.divider()
     
@@ -901,7 +957,7 @@ def show_analytics():
                 st.markdown(f"**{idx}. {cert}**")
                 st.markdown(f"   - {count} ({percentage:.1f}%)")
     else:
-        st.info("No certifications found in resumes.")
+        st.info("📋 **No certifications found**\n\nNo certifications were detected in the uploaded resumes.")
     
     st.divider()
     
@@ -1227,15 +1283,22 @@ st.markdown("""
             max-width: 100% !important;
         }
         
-        /* Sidebar on mobile - override desktop width */
-        [data-testid="stSidebar"] {
+        /* Sidebar on mobile - override desktop width, but respect collapsed state */
+        [data-testid="stSidebar"][aria-expanded="true"] {
             min-width: 100% !important;
             max-width: 100% !important;
             width: 100% !important;
         }
         
+        /* Collapsed sidebar on mobile - hide completely */
+        [data-testid="stSidebar"][aria-expanded="false"] {
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+        }
+        
         /* Sidebar content on mobile */
-        [data-testid="stSidebar"] > div:first-child {
+        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child {
             padding: 0.75rem !important;
         }
         
@@ -1372,6 +1435,17 @@ st.markdown("""
             width: 100% !important;
             max-width: 100% !important;
         }
+    }
+    
+    /* Sidebar toggle button - ensure visibility */
+    button[kind="header"] {
+        background: transparent !important;
+        color: #ffffff !important;
+    }
+    
+    /* Sidebar toggle button hover */
+    button[kind="header"]:hover {
+        background: rgba(255, 255, 255, 0.1) !important;
     }
     
     /* Sidebar styling - Dark theme to match main content */
@@ -1762,11 +1836,11 @@ load_existing_store()
 
 # Enhanced Sidebar with perfect UI and mobile responsiveness
 with st.sidebar:
-    # App Logo/Header
+    # App Logo/Header - Dark theme colors
     st.markdown("""
-    <div style='text-align: center; padding: 1rem 0; border-bottom: 2px solid #e0e0e0; margin-bottom: 1.5rem;'>
-        <h2 style='margin: 0; color: #1f77b4;'>📄 Resume RAG</h2>
-        <p style='margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;'>Intelligent Candidate Analysis</p>
+    <div style='text-align: center; padding: 1rem 0; border-bottom: 2px solid #4a4a5a; margin-bottom: 1.5rem;'>
+        <h2 style='margin: 0; color: #4fc3f7;'>📄 Resume RAG</h2>
+        <p style='margin: 0.5rem 0 0 0; color: #b0b0b0; font-size: 0.9rem;'>Intelligent Candidate Analysis</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2064,10 +2138,10 @@ with st.sidebar:
             st.session_state.confirm_delete = True
             st.warning("⚠️ Click again to confirm deletion")
     
-    # Footer
+    # Footer - Dark theme colors
     st.divider()
     st.markdown("""
-    <div style='text-align: center; padding: 1rem 0; color: #666; font-size: 0.8rem;'>
+    <div style='text-align: center; padding: 1rem 0; color: #b0b0b0; font-size: 0.8rem;'>
         <p>📄 Resume RAG System</p>
         <p>Version 2.0</p>
     </div>
