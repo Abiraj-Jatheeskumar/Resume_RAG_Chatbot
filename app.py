@@ -1844,42 +1844,16 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # System Status Section
+    # System Status Section - Simplified (no technical details)
     st.markdown("### 🔌 System Status")
     
     if llm:
-        azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-        if azure_key:
-            st.success(f"✅ **Azure OpenAI**\n\n**Model:** {llm_model}\n\n**Status:** Active")
-        else:
-            st.success(f"✅ **{llm_provider.upper()}**\n\n**Model:** {llm_model}\n\n**Status:** Active")
-        st.info("🤖 **Full RAG Mode**\n\nAI-powered intelligent responses enabled")
+        # Hide technical details - just show it's working
+        st.success("✅ **AI Assistant**\n\n**Status:** Ready")
+        st.info("🤖 **Intelligent Search**\n\nAI-powered responses enabled")
     else:
-        st.warning("⚠️ **Basic Retrieval Mode**\n\nNo LLM provider detected")
-        st.error("❌ **Limited Functionality**\n\nOnly showing document snippets")
-        
-        azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-        if azure_key:
-            st.info("💡 Azure OpenAI credentials detected\n\nCheck configuration in `.env` file")
-        
-        with st.expander("🔑 Enable Full RAG", expanded=False):
-            st.markdown("""
-            **To enable AI-powered responses:**
-            
-            **Option 1: Azure OpenAI**
-            ```
-            AZURE_OPENAI_KEY=your-key
-            AZURE_OPENAI_ENDPOINT=your-endpoint
-            AZURE_OPENAI_DEPLOYMENT=your-deployment
-            ```
-            
-            **Option 2: Standard OpenAI**
-            ```
-            OPENAI_API_KEY=sk-your-key
-            ```
-            
-            See `OPENAI_SETUP.md` for details.
-            """)
+        st.warning("⚠️ **Basic Mode**\n\nAI features unavailable")
+        st.info("💡 **Tip:**\n\nConfigure AI settings to enable intelligent search")
     
     st.divider()
     

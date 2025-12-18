@@ -120,16 +120,24 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     if emails:
         metadata["email"] = emails[0]
     
-    # Extract phone (various formats)
+    # Extract phone (various formats including international)
     phone_patterns = [
-        r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        r'\+\d{1,3}[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        r'\d{3}[-.\s]?\d{3}[-.\s]?\d{4}'
+        r'\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}',  # International: +1-234-567-8900
+        r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',  # US: (123) 456-7890
+        r'\d{3}[-.\s]?\d{3}[-.\s]?\d{4}',  # US: 123-456-7890
+        r'\d{3}[-\s]\d{3}[-\s]\d{4}',  # Format: 123 456 7890
+        r'\d{10}',  # No separator: 1234567890
+        r'\+\d{1,4}[-\s]?\d{6,14}',  # Generic international
     ]
     for pattern in phone_patterns:
         phones = re.findall(pattern, text)
         if phones:
-            metadata["phone"] = phones[0]
+            # Filter out numbers that look like dates or other data
+            phone = phones[0].strip()
+            # Skip if it looks like a year (4 digits only)
+            if re.match(r'^\d{4}$', phone):
+                continue
+            metadata["phone"] = phone
             break
     
     # Extract name - improved logic to filter out headers
@@ -162,6 +170,9 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     filename_base = os.path.splitext(filename)[0]  # Remove extension
     # Remove common separators and check if it looks like a name
     filename_clean = re.sub(r'[-_]', ' ', filename_base).strip()
+    # Remove common resume-related words from filename
+    filename_clean = re.sub(r'\b(resume|cv|curriculum|vitae|intern|internship|fresher|experienced|updated|final|latest)\b', '', filename_clean, flags=re.IGNORECASE)
+    filename_clean = re.sub(r'\s+', ' ', filename_clean).strip()
     filename_parts = filename_clean.split()
     # If filename has 2-3 capitalized words, it might be a name
     if 2 <= len(filename_parts) <= 3:
@@ -215,17 +226,27 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
                         break
             
             # Also try single capitalized word (could be last name only)
-            elif len(words) == 1 and words[0][0].isupper() and len(words[0]) > 2:
+            if len(words) == 1 and words[0][0].isupper() and len(words[0]) > 2:
                 if re.match(r'^[A-Z][a-z]+$', words[0]):
                     metadata["name"] = words[0]
                     break
     
-    # Fallback: use filename if still no name found
+    # Fallback: use filename if still no name found (but clean it better)
     if not metadata["name"]:
-        # Clean filename and use as fallback
+        # Clean filename and use as fallback - remove common resume keywords
         filename_clean = re.sub(r'[-_.]', ' ', filename_base).strip()
-        if filename_clean:
+        # Remove common resume-related words
+        filename_clean = re.sub(r'\b(resume|cv|curriculum|vitae|intern|internship|fresher|experienced|updated|final|latest)\b', '', filename_clean, flags=re.IGNORECASE)
+        filename_clean = re.sub(r'\s+', ' ', filename_clean).strip()
+        # Only use if it looks like a name (2-4 words, starts with capital)
+        words = filename_clean.split()
+        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w):
             metadata["name"] = filename_clean
+        elif filename_clean:  # At least set something
+            # Take first 2-3 capitalized words only
+            name_words = [w for w in words if w and w[0].isupper() and w.isalpha()][:3]
+            if name_words:
+                metadata["name"] = ' '.join(name_words)
     
     # Extract skills (common tech keywords) - improved with word boundaries
     # Skills list with proper patterns for accurate matching
@@ -627,10 +648,12 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     metadata["job_titles"] = unique_titles
     
     # Extract company names (look for capitalized words after job titles or in experience section)
-    # Improved with better context validation
+    # Improved with better context validation and more flexible patterns
     company_patterns = [
-        r'at\s+([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries)?)',
-        r'([A-Z][a-zA-Z\s&]+(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries))',
+        r'at\s+([A-Z][a-zA-Z\s&\.\-]+?)(?:\s*\n|\s*-|\s*\||$)',  # "at Company\n" or "at Company -"
+        r'(?:worked|working|employed)\s+(?:at|for|with)\s+([A-Z][a-zA-Z\s&\.\-]+?)(?:\s*\n|\s*-|\s*\||$)',
+        r'([A-Z][a-zA-Z\s&\.\-]+?)\s*(?:Inc|LLC|Corp|Ltd|Company|Technologies|Systems|Solutions|Group|Industries|Pvt|Limited)\b',
+        r'(?:^|\n)\s*([A-Z][a-zA-Z\s&\.\-]{3,40}?)\s*[\|\-]\s*(?:Software|Engineer|Developer|Analyst|Manager|Director)',
     ]
     
     # Words to exclude (common false positives)
@@ -652,8 +675,18 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         for match in matches:
             company = match.group(1).strip() if match.groups() else match.group(0).strip()
             
+            # Clean up company name - remove trailing newlines, dates, etc.
+            company = re.sub(r'\s*\n.*$', '', company)  # Remove everything after newline
+            company = re.sub(r'\s*[\|\-]\s*\d{4}.*$', '', company)  # Remove dates
+            company = re.sub(r'\s*\(.*?\)\s*', ' ', company)  # Remove parentheses content
+            company = company.strip()
+            
             # Basic validation
             if len(company) < 3 or len(company) > 50:
+                continue
+            
+            # Skip if contains only common words
+            if company.lower() in ['the', 'and', 'at', 'of', 'in', 'on', 'with']:
                 continue
             
             # Check if it's in a valid company context
@@ -682,7 +715,7 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
             # Include if it has company context OR appears in experience section
             if has_company_context or any(keyword in context for keyword in ['experience', 'employment', 'work']):
                 # Additional check: company should start with capital and have reasonable structure
-                if company[0].isupper() and not company.lower().startswith(tuple(exclude_company_words)):
+                if company and company[0].isupper() and not company.lower().startswith(tuple(exclude_company_words)):
                     companies_found.append(company)
     
     # Remove duplicates and filter out invalid entries
@@ -703,16 +736,46 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
     
     metadata["companies"] = unique_companies
     
-    # Extract location (simplified - looks for city, state patterns)
-    location_patterns = [
-        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2})',  # City, State
-        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+)',  # City, State (full name)
+    # Extract location (improved - looks for city, state patterns with context validation)
+    # Exclude programming languages and common tech terms from location detection
+    tech_terms = [
+        'Python', 'Java', 'JavaScript', 'TypeScript', 'Ruby', 'PHP', 'Swift', 'Kotlin',
+        'React', 'Angular', 'Vue', 'Node', 'Django', 'Flask', 'Spring', 'Express',
+        'SQL', 'MySQL', 'PostgreSQL', 'MongoDB', 'Redis', 'Docker', 'Kubernetes',
+        'AWS', 'Azure', 'GCP', 'Git', 'GitHub', 'Linux', 'Windows', 'Script', 'Code'
     ]
     
+    location_patterns = [
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # City, Country/State (full name)
+        r'([A-Z][a-z]+),\s*([A-Z]{2})\b',  # City, State (2-letter code)
+    ]
+    
+    # Only search in first 1000 characters (header/contact section)
+    text_header = text[:1000]
+    
     for pattern in location_patterns:
-        match = re.search(pattern, text)
-        if match:
-            metadata["location"] = match.group(0).strip()
+        matches = re.finditer(pattern, text_header)
+        for match in matches:
+            location_candidate = match.group(0).strip()
+            city_part = match.group(1).strip()
+            
+            # Skip if the city part matches a tech term
+            if city_part in tech_terms or city_part.upper() in tech_terms:
+                continue
+            
+            # Skip if surrounded by tech context
+            context_start = max(0, match.start() - 50)
+            context_end = min(len(text_header), match.end() + 50)
+            context = text_header[context_start:context_end].lower()
+            
+            tech_context_words = ['programming', 'language', 'framework', 'library', 'skill', 'proficient', 'experience with']
+            if any(word in context for word in tech_context_words):
+                continue
+            
+            metadata["location"] = location_candidate
+            break
+        
+        if metadata["location"]:
             break
     
     # Extract certifications - improved with comprehensive patterns and generic detection
@@ -812,9 +875,27 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         # Data/ML
         "Tableau Certified": [r'\bTableau\s+Certified\b'],
         "Snowflake Certified": [r'\bSnowflake\s+Certified\b'],
+        # Online Learning Platforms
+        "Coursera": [r'\bCoursera\b', r'\bCoursera\s+Certificate\b', r'\bCoursera\s+Specialization\b'],
+        "Udemy": [r'\bUdemy\b', r'\bUdemy\s+Certificate\b'],
+        "edX": [r'\bedX\b', r'\bedX\s+Certificate\b'],
+        "LinkedIn Learning": [r'\bLinkedIn\s+Learning\b', r'\bLynda\b'],
+        "Pluralsight": [r'\bPluralsight\b'],
+        "DataCamp": [r'\bDataCamp\b'],
+        "Udacity": [r'\bUdacity\b', r'\bUdacity\s+Nanodegree\b'],
+        # Platform-specific
+        "HackerRank": [r'\bHackerRank\b', r'\bHackerRank\s+Certificate\b'],
+        "Postman": [r'\bPostman\s+API\b', r'\bPostman\s+Student\s+Expert\b', r'\bAPI\s+Fundamentals\s+Student\s+Expert\b'],
+        "MongoDB University": [r'\bMongoDB\s+University\b', r'\bMongoDB\s+Certified\b'],
+        "Meta": [r'\bMeta\s+Certified\b', r'\bFacebook\s+Certified\b', r'\bMeta\s+Front-End\b', r'\bMeta\s+Back-End\b'],
+        "freeCodeCamp": [r'\bfreeCodeCamp\b', r'\bFree\s+Code\s+Camp\b'],
+        # Programming Language Certifications
+        "Python Institute": [r'\bPCEP\b', r'\bPCAP\b', r'\bPCPP\b', r'\bPython\s+Institute\b'],
+        "Java Certified": [r'\bOCJP\b', r'\bOCPJP\b', r'\bJava\s+SE\s+Programmer\b'],
         # Other common certifications
         "TOGAF": [r'\bTOGAF\b'],
-        "COBIT": [r'\bCOBIT\b']
+        "COBIT": [r'\bCOBIT\b'],
+        "Six Sigma": [r'\bSix\s+Sigma\b', r'\bLean\s+Six\s+Sigma\b', r'\bGreen\s+Belt\b', r'\bBlack\s+Belt\b']
     }
     
     certs_found = []
@@ -916,7 +997,7 @@ def extract_metadata(text: str, filename: str) -> Dict[str, str]:
         if in_cert_section and line_lower in ['experience', 'education', 'skills', 'projects', 'summary']:
             in_cert_section = False
     
-    metadata["certifications"] = certs_found[:10]  # Increased limit to 10
+    metadata["certifications"] = certs_found[:15]  # Increased limit to 15
     
     return metadata
 
